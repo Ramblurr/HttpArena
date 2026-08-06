@@ -9,8 +9,8 @@
    [next.jdbc :as jdbc]
    [next.jdbc.connection :as jdbc.connection]
    [next.jdbc.result-set :as rs]
-   [sqlite4clj.core :as sqlite]
-   [ring.util.response :as response])
+   [ring.util.response :as response]
+   [sqlite4clj.core :as sqlite])
   (:import
    (java.io InputStream)
    (java.net URI)
@@ -34,7 +34,7 @@
   "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
    FROM items
    WHERE price BETWEEN ? AND ?
-   LIMIT 50")
+   LIMIT ?")
 (def static-content-types
   {"css" "text/css"
    "js" "application/javascript"
@@ -100,7 +100,7 @@
 (declare compute-json-items)
 
 (defn build-json-body [items]
-  (json/write-str {:items (compute-json-items items)
+  (json/write-str {:items (compute-json-items items 1.0)
                    :count (count items)}))
 
 (defonce dataset
@@ -122,9 +122,9 @@
 
 (defonce async-db (atom nil))
 
-(defn compute-json-items [items]
+(defn compute-json-items [items multiplier]
   (mapv (fn [{:keys [price quantity] :as item}]
-          (assoc item :total (round2 (* price quantity))))
+          (assoc item :total (round2 (* price quantity multiplier))))
         items))
 
 (defn request-sum [request]
@@ -161,10 +161,14 @@
 (defn pipeline-handler [_request]
   (text-response 200 "ok"))
 
-(defn json-handler [_request]
+(defn json-handler [request]
   (if-let [source @dataset]
-    (json-response 200 {:items (compute-json-items source)
-                        :count (count source)})
+    (let [requested-count (min (parse-long-safe (get-in request [:path-params :count]))
+                                (count source))
+          multiplier (parse-double-safe (get-in request [:query-params :m]) 1.0)
+          items (compute-json-items (take requested-count source) multiplier)]
+      (json-response 200 {:items items
+                          :count (count items)}))
     (text-response 500 "dataset.json not available")))
 
 (defn compression-handler [_request]
@@ -244,12 +248,13 @@
   (let [query-params (:query-params request)
         min-price (parse-double-safe (get query-params :min) 10.0)
         max-price (parse-double-safe (get query-params :max) 50.0)
+        limit (parse-long-safe (or (get query-params :limit) "50"))
         database (init-async-db!)
         items (if database
                 (try
                   (mapv postgres-row->item
                         (jdbc/execute! database
-                                       [async-db-query min-price max-price]
+                                       [async-db-query min-price max-price limit]
                                        {:builder-fn rs/as-unqualified-lower-maps}))
                   (catch Throwable _
                     []))
@@ -281,7 +286,7 @@
 (def routes
   #{["/baseline11" :get (conj common-interceptors `baseline-handler) :route-name ::baseline-get]
     ["/baseline11" :post (conj common-interceptors `baseline-handler) :route-name ::baseline-post]
-    ["/json" :get (conj common-interceptors `json-handler) :route-name ::json]
+    ["/json/:count" :get (conj common-interceptors `json-handler) :route-name ::json]
     ["/compression" :get (conj common-interceptors `compression-handler) :route-name ::compression]
     ["/db" :get (conj common-interceptors `db-handler) :route-name ::db]
     ["/async-db" :get (conj common-interceptors `async-db-handler) :route-name ::async-db]
