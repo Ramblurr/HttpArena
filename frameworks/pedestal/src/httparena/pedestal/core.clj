@@ -15,7 +15,7 @@
    [io.vertx.core.json JsonArray]
    [io.vertx.pgclient PgBuilder PgConnectOptions]
    [io.vertx.sqlclient Pool PoolOptions Row Tuple]
-   (java.io InputStream)
+   (java.io InputStream OutputStream)
    (org.eclipse.jetty.ee10.servlet ServletContextHandler)
    (org.eclipse.jetty.server.handler.gzip GzipHandler)))
 
@@ -38,15 +38,7 @@
    "json" "application/json"})
 
 (defn parse-long-safe [value]
-  (cond
-    (nil? value) 0
-    (string? value)
-    (let [trimmed (.trim ^String value)]
-      (if (.isEmpty trimmed)
-        0
-        (Long/parseLong trimmed)))
-    :else
-    (recur (str value))))
+  (or (some-> value str str/trim parse-long) 0))
 
 (defn parse-double-safe [value default]
   (cond
@@ -91,15 +83,6 @@
                0)]
     (+ a b body)))
 
-(defn count-stream-bytes [^InputStream in]
-  (with-open [stream in]
-    (let [buffer (byte-array 16384)]
-      (loop [total 0]
-        (let [read-count (.read stream buffer 0 (alength buffer))]
-          (if (neg? read-count)
-            total
-            (recur (+ total read-count))))))))
-
 (defn text-response [status body]
   {:status status
    :headers {"content-type" "text/plain"}
@@ -119,15 +102,17 @@
 (defn json-handler [request]
   (if-let [source @dataset]
     (let [requested-count (min (parse-long-safe (get-in request [:path-params :count]))
-                                (count source))
-          multiplier (parse-double-safe (get-in request [:query-params :m]) 1.0)
-          items (compute-json-items (take requested-count source) multiplier)]
+                               (count source))
+          multiplier      (parse-double-safe (get-in request [:query-params :m]) 1.0)
+          items           (compute-json-items (take requested-count source) multiplier)]
       (json-response 200 {:items items
                           :count (count items)}))
     (text-response 500 "dataset.json not available")))
 
 (defn upload-handler [request]
-  (text-response 200 (str (count-stream-bytes (:body request)))))
+  (with-open [^InputStream stream (:body request)]
+    (text-response 200
+                   (str (.transferTo stream (OutputStream/nullOutputStream))))))
 
 (defn vertx-row->item [^Row row]
   {:id       (.getInteger row "id")
@@ -157,18 +142,18 @@
                   nil)))))))
 
 (defn async-db-handler [request]
-  (let [query-params (:query-params request)
-        min-price (int (parse-long-safe (or (get query-params :min) "10")))
-        max-price (int (parse-long-safe (or (get query-params :max) "50")))
-        limit (int (min 50 (max 1 (parse-long-safe (or (get query-params :limit) "50")))))
+  (let [query-params   (:query-params request)
+        min-price      (int (parse-long-safe (or (get query-params :min) "10")))
+        max-price      (int (parse-long-safe (or (get query-params :max) "50")))
+        limit          (int (min 50 (max 1 (parse-long-safe (or (get query-params :limit) "50")))))
         ^Pool database (init-async-db!)
-        response-ch (async/promise-chan)
+        response-ch    (async/promise-chan)
         empty-response (json-response 200 {:items []
                                            :count 0})
-        respond! (fn [response]
-                   (async/put! response-ch response
-                               (fn [_]
-                                 (async/close! response-ch))))]
+        respond!       (fn [response]
+                         (async/put! response-ch response
+                                     (fn [_]
+                                       (async/close! response-ch))))]
     (if database
       (try
         (-> (.preparedQuery database async-db-query)
@@ -202,7 +187,7 @@
              (not (str/includes? filename "/"))
              (not (str/includes? filename "..")))
     (if-let [file-response (response/file-response filename {:root static-root
-                                                            :index-files? false})]
+                                                             :index-files? false})]
       (response/content-type file-response (static-content-type filename))
       (text-response 404 "not found"))))
 
