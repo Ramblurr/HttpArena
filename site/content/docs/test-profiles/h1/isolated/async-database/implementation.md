@@ -3,7 +3,7 @@ title: Implementation Guidelines
 seo_title: "Async Database Benchmark (Postgres) — Implementation Guide"
 description: "Endpoint contract, request and response shapes, and the anti-cheat constraints a framework must satisfy for the async Postgres benchmark."
 ---
-{{< type-rules standard="Must use an async PostgreSQL driver with standard connection pooling. Size the pool from `DATABASE_MAX_CONN` (currently 256), not from CPU count." tuned="May use custom pool sizes, prepared statement caching, or driver-specific optimizations beyond defaults." engine="No specific rules." >}}
+{{< type-rules standard="Must use an async PostgreSQL driver with standard connection pooling. Size the pool from `DATABASE_MAX_CONN`, not from CPU count. Driver-default prepared-statement behavior is allowed." tuned="May add pool tuning or application-added prepared-statement cache policy, sizing, or warming beyond driver defaults." engine="No specific rules." >}}
 
 
 The Async Database profile measures how efficiently a framework handles concurrent database queries over a network connection - exercising async I/O scheduling, connection pooling, and async Postgres driver efficiency.
@@ -15,7 +15,7 @@ The Async Database profile measures how efficiently a framework handles concurre
 ## How it works
 
 1. A Postgres container runs alongside the framework container on the same host, listening on `localhost:5432`
-2. The framework reads the `DATABASE_URL` environment variable at startup and initializes a connection pool
+2. The framework reads `DATABASE_URL` and `DATABASE_MAX_CONN`, then initializes its connection pool either eagerly at startup or lazily on the first async-db request
 3. On each `GET /async-db?min=10&max=50&limit=20` request, the framework:
    - Parses `min`, `max`, and `limit` as **integers** (defaults: `min=10`, `max=50`, `limit=50`; `limit` clamped to 1–50)
    - Executes an async range query with the parameterized `LIMIT` against the Postgres `items` table
@@ -92,35 +92,35 @@ When Postgres is unavailable or the query returns no rows, return:
 
 ## Environment variables
 
-The benchmark runner provides these environment variables to your container:
+The benchmark runner provides these environment variables. Ordinary containers receive the values below; compose-orchestrated entries may supply a profile-specific `DATABASE_MAX_CONN` value through their compose file:
 
 | Variable | Value | Description |
 |----------|-------|-------------|
 | `DATABASE_URL` | `postgres://bench:bench@localhost:5432/benchmark` | Postgres connection string. Always read from this - never hardcode. |
-| `DATABASE_MAX_CONN` | `256` | Maximum connections allowed by the Postgres instance. Use this to size your connection pool. May be lower for CPU-constrained tests (e.g. API-4, API-16). |
+| `DATABASE_MAX_CONN` | `256` for ordinary containers; compose-defined for compose profiles | Shared Postgres connection limit. Derive pool sizes from it; the sum across process-local pools must not exceed it. |
 
 ## Implementation notes
 
 - **Async driver required** - use your language's async Postgres driver (e.g., `asyncpg` for Python, `tokio-postgres` for Rust, `pg` for Node.js, `r2d2`/`deadpool` for connection pools)
-- **Connection pool** - initialize a pool at startup. Size it from `DATABASE_MAX_CONN` (currently 256). Going higher than that will cause Postgres to reject connections under load
-- **Prepared statements** - prepare the query once per connection, reuse across requests
+- **Connection pool** - initialize the pool eagerly at startup or lazily on the first async-db request. Derive its size from the supplied `DATABASE_MAX_CONN`; if several processes own pools, their combined limit must stay within that value
+- **Prepared queries** - execute the parameterized query through the pooled driver's normal API. Calling a prepared-query API on each request is Standard when the driver manages preparation and reuse internally. A driver's default internal prepared-statement cache is also Standard; application-added cache policy, sizing, warming, or equivalent tuning requires Tuned mode
 - **Default parameters** - all three query parameters are integers. If `min` or `max` is missing, default to `10` and `50`. If `limit` is missing, default to `50`. Clamp `limit` to the range 1–50
 - **Integer types matter** - `price` and `rating_score` are `INTEGER` columns. Read them as `i32`/`int`/equivalent - using `f64`/`double` will fail with type-mismatch errors in strict drivers like `tokio-postgres`
 - **Tags are JSONB** - Postgres returns them as native JSON, no string parsing needed
 
-## Important: environment variables and initialization
+## Pool initialization and retry
 
 **Never hardcode** connection details. Always read `DATABASE_URL` for the connection string and `DATABASE_MAX_CONN` for pool sizing.
 
-The benchmark runner starts Postgres and waits for the seed data to be fully loaded before starting your framework container. By the time your server starts, Postgres is ready and accepting connections.
+The benchmark runner starts Postgres and waits for the seed data to load before starting your framework container. A Standard implementation may create its pool eagerly during process startup or lazily on the first async-db request.
 
-**Recommended: lazy initialization with retry.** As a safety net, handle the case where the initial connection fails gracefully. Do not crash the server - return the empty fallback response and retry on the next request.
+If pool creation or a query fails, keep the server running and return `{"items":[],"count":0}` with status `200`. Leave the implementation able to retry pool creation or the query on a later request.
 
 ```
 # Pseudocode
 pg_pool = null
 
-on_startup:
+on_startup (optional eager path):
     try: pg_pool = connect(DATABASE_URL)
     catch: pg_pool = null  # don't crash
 
