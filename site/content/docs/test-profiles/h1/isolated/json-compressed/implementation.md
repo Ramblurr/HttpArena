@@ -10,9 +10,9 @@ The JSON Compressed profile is the same workload as [JSON Processing](../json-pr
 ## How it works
 
 1. Server reads `/data/dataset.json` at startup (same 50-item dataset as JSON Processing)
-2. On each `GET /json/{count}?m={multiplier}` request, the server:
+2. On each `GET /json/{count}` request, optionally with `?m={multiplier}`, the server:
    - Takes the first `count` items from the dataset (1–50)
-   - Computes `total = price × quantity × m` per item
+   - Computes integer `total = price × quantity × m` per item, with no rounding; optional integer `m` defaults to integer `1` when absent
    - Serializes to JSON
    - Compresses the response body with gzip or brotli
    - Returns `Content-Type: application/json` and `Content-Encoding: gzip` (or `br`)
@@ -58,13 +58,13 @@ Decompressed body:
 }
 ```
 
-`total` is `price * quantity * m` - integer arithmetic, no rounding. For `GET /json/5?m=1`, `total` equals `price * quantity`; the multiplier is never implicitly 1.
+`total` is the integer `price * quantity * m`, with no rounding. The optional integer `m` defaults to integer `1` when absent, so both `GET /json/5` and `GET /json/5?m=1` compute `total` as `price * quantity`.
 
 ## Parameters
 
 | Parameter | Value |
 |-----------|-------|
-| Endpoint | `GET /json/{count}?m={multiplier}` |
+| Endpoint | `GET /json/{count}` with optional `?m={multiplier}` (default: integer `1`) |
 | Counts × multipliers | (25,4), (40,8), (50,6) (round-robin) |
 | Connections | 512, 4096, 16384 |
 | Pipeline | 1 |
@@ -112,5 +112,5 @@ The resulting per-profile score feeds into the composite like every other profil
 
 - **A framework that picks brotli can dominate even at lower rps**, provided the smaller bytes-per-response wins back more score than the rps gap costs. This reflects real-world bandwidth-constrained serving.
 - **Gzip-only frameworks are competitive when their compression level is aggressive enough** to keep `myBpr` near the brotli leader. The formula rewards ratio, not the specific encoding chosen.
-- **Pre-computed compressed payloads are out of the question for `production` type** - the type rules require the response pipeline to actually compress per-request. See [type rules](/docs/add-framework/meta-json/#type-rules).
+- **Pre-computed compressed payloads are forbidden in Standard mode** - the rules require the response pipeline to compress each response per request. See the [Standard implementation rules](/docs/add-framework/implementation-rules/frameworks/standard/).
 - **The best-conn-count panel on the profile tab can rank differently from the composite column**, because one picks the highest-scoring conn count and the other averages. Both are intentional: the profile tab answers "which framework wins at its best setting?"; the composite answers "which framework is most consistent across loads?".

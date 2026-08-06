@@ -27,13 +27,16 @@ Three requests are sent with different counts and multipliers:
 | 40 | 7 |
 | 50 | 2 |
 
+The optional `m` query parameter is an integer and defaults to integer `1` when absent. The table lists every `(count, m)` pair used for compressed-response validation.
+
 For each response, after decompressing, the validator checks:
 
-1. `count` field equals the route count
-2. Every item in `items` contains the full schema - `id`, `name`, `category`, `price`, `quantity`, `active`, `tags` (array), `rating` (object with `score` and `count`), and `total`
-3. `total == price * quantity * m` for every item (integer, exact)
+1. The response `count` is an integer equal to the route count, and `items` contains exactly that many entries
+2. Every item has the documented types: `id`, `price`, `quantity`, `rating.score`, `rating.count`, and `total` are integers; `name` and `category` are strings; `tags` is an array of strings; and `active` is a boolean
+3. Boolean values are rejected for integer fields
+4. Each `total` equals the integer product `price * quantity * m`, with no rounding
 
-Any missing field or incorrect arithmetic is a failure. Partial payloads that omit fields are rejected. This confirms the server honors the `m` parameter and applies it per item.
+Missing fields, invalid types, forged counts, or incorrect arithmetic fail validation after decompression.
 
 ### No Content-Encoding when Accept-Encoding is absent
 

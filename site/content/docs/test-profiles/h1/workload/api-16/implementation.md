@@ -3,13 +3,13 @@ title: Implementation Guidelines
 seo_title: "API-16 Constrained Workload Benchmark — Implementation Guide"
 description: "Endpoint contract, request and response shapes, and the anti-cheat constraints a framework must satisfy for the API-16 constrained workload."
 ---
-{{< type-rules standard="All endpoint implementations must follow their respective production rules. No endpoint-specific optimizations that would not be used in production." tuned="May optimize each endpoint independently. Custom serializers and non-default configurations allowed. Pre-computed / pre-serialized JSON response caches are not allowed on either type - the JSON slice of this workload must still be serialized per request from live data." engine="No specific rules." >}}
+{{< type-rules standard="All endpoint implementations must follow their respective Standard rules. No endpoint-specific optimizations outside those rules." tuned="May optimize each endpoint independently. Custom serializers and non-default configurations allowed. Pre-computed / pre-serialized JSON response caches are not allowed on either type - the JSON slice of this workload must still be serialized per request from live data." engine="No specific rules." >}}
 
-The API-16 profile is identical to [API-4](../../api-4/implementation) but with the server constrained to **16 CPUs and 32 GB memory** instead of 4 CPUs and 16 GB. This measures how well the framework scales with more available resources.
+The API-16 profile is identical to [API-4](/docs/test-profiles/h1/workload/api-4/implementation/) but with the server constrained to **16 CPUs and 32 GB memory** instead of 4 CPUs and 16 GB. This measures how well the framework scales with more available resources.
 
 **Connections:** 1,024
 
-All [request mix and implementation rules](../../api-4/implementation) from API-4 apply.
+All [request mix and implementation rules](/docs/test-profiles/h1/workload/api-4/implementation/) from API-4 apply.
 
 ## What it measures
 

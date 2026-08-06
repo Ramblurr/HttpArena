@@ -533,6 +533,45 @@ check_header() {
     fi
 }
 
+validate_json_response() {
+    local expected_count="$1" multiplier="$2"
+    python3 -c '
+import json, sys
+
+def is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+def valid_item(item):
+    rating = item.get("rating") if isinstance(item, dict) else None
+    tags = item.get("tags") if isinstance(item, dict) else None
+    return (isinstance(item, dict)
+            and is_int(item.get("id"))
+            and isinstance(item.get("name"), str)
+            and isinstance(item.get("category"), str)
+            and is_int(item.get("price"))
+            and is_int(item.get("quantity"))
+            and isinstance(item.get("active"), bool)
+            and isinstance(tags, list) and all(isinstance(tag, str) for tag in tags)
+            and isinstance(rating, dict)
+            and is_int(rating.get("score"))
+            and is_int(rating.get("count"))
+            and is_int(item.get("total")))
+
+expected_count = int(sys.argv[1])
+multiplier = int(sys.argv[2])
+data = json.load(sys.stdin)
+count = data.get("count") if isinstance(data, dict) else None
+items = data.get("items") if isinstance(data, dict) else None
+cardinality = (is_int(count) and count == expected_count
+               and isinstance(items, list) and len(items) == count)
+schema = cardinality and bool(items) and all(valid_item(item) for item in items)
+totals = schema and all(
+    item["total"] == item["price"] * item["quantity"] * multiplier
+    for item in items)
+print("VALID" if schema and totals else "INVALID")
+' "$expected_count" "$multiplier" 2>/dev/null
+}
+
 wait_h2() {
     echo "[wait] Waiting for HTTPS port..."
     for i in $(seq 1 15); do
@@ -653,40 +692,17 @@ if has_test "json" || has_test "api-4" || has_test "api-16"; then
         jcount="${jp%%:*}"
         jm="${jp##*:}"
         response=$(curl -s --max-time 30 "http://localhost:$PORT/json/$jcount?m=$jm" || true)
-        json_result=$(echo "$response" | python3 -c "
-import sys, json
-m = $jm
-d = json.load(sys.stdin)
-count = d.get('count', 0)
-items = d.get('items', [])
-def valid_item(it):
-    r = it.get('rating')
-    return ('id' in it and 'name' in it and 'category' in it and 'price' in it
-            and 'quantity' in it and 'total' in it
-            and isinstance(it.get('tags'), list) and isinstance(it.get('active'), bool)
-            and isinstance(r, dict) and 'score' in r and 'count' in r)
-valid = all(valid_item(it) for it in items) if items else False
-correct_totals = True
-for item in items:
-    expected = item.get('price', 0) * item.get('quantity', 0) * m
-    if item.get('total', 0) != expected:
-        correct_totals = False
-        break
-print(f'{count} {valid} {correct_totals}')
-" 2>/dev/null || echo "0 False False")
-        json_count=$(echo "$json_result" | cut -d' ' -f1)
-        json_valid=$(echo "$json_result" | cut -d' ' -f2)
-        json_correct=$(echo "$json_result" | cut -d' ' -f3)
+        json_result=$(printf '%s' "$response" | validate_json_response "$jcount" "$jm" || echo "INVALID")
 
-        if [ "$json_count" = "$jcount" ] && [ "$json_valid" = "True" ] && [ "$json_correct" = "True" ]; then
+        if [ "$json_result" = "VALID" ]; then
             :
         else
-            fail_with_link "[GET /json/$jcount?m=$jm]: count=$json_count, schema=$json_valid, correct_totals=$json_correct" "$JSON_DOCS"
+            fail_with_link "[GET /json/$jcount?m=$jm]: response violates cardinality, schema, or total contract" "$JSON_DOCS"
             json_fail=true
         fi
     done
     if [ "$json_fail" = "false" ]; then
-        echo "  PASS [GET /json/{count}?m=X] (4 counts × multipliers + full item schema verified)"
+        echo "  PASS [GET /json/{count}?m=X] (4 counts × multipliers + item cardinality and full schema verified)"
         PASS=$((PASS + 1))
     fi
 
@@ -698,7 +714,7 @@ fi
 # ───── JSON Compressed (GET /json/{count}?m=X with Accept-Encoding) ─────
 
 if has_test "json-comp"; then
-    JSONCOMP_DOCS="$DOCS_BASE/h1/isolated/json-processing/validation"
+    JSONCOMP_DOCS="$DOCS_BASE/h1/isolated/json-compressed/validation"
     echo "[test] json-comp endpoint"
 
     # Must return Content-Encoding: gzip or br when Accept-Encoding is sent
@@ -718,40 +734,17 @@ if has_test "json-comp"; then
         jccount="${jcp%%:*}"
         jcm="${jcp##*:}"
         jc_response=$(curl -s --max-time 30 --compressed -H "Accept-Encoding: gzip, br" "http://localhost:$PORT/json/$jccount?m=$jcm" || true)
-        jc_result=$(echo "$jc_response" | python3 -c "
-import sys, json
-m = $jcm
-d = json.load(sys.stdin)
-count = d.get('count', 0)
-items = d.get('items', [])
-def valid_item(it):
-    r = it.get('rating')
-    return ('id' in it and 'name' in it and 'category' in it and 'price' in it
-            and 'quantity' in it and 'total' in it
-            and isinstance(it.get('tags'), list) and isinstance(it.get('active'), bool)
-            and isinstance(r, dict) and 'score' in r and 'count' in r)
-valid = all(valid_item(it) for it in items) if items else False
-correct_totals = True
-for item in items:
-    expected = item.get('price', 0) * item.get('quantity', 0) * m
-    if item.get('total', 0) != expected:
-        correct_totals = False
-        break
-print(f'{count} {valid} {correct_totals}')
-" 2>/dev/null || echo "0 False False")
-        jc_count=$(echo "$jc_result" | cut -d' ' -f1)
-        jc_valid=$(echo "$jc_result" | cut -d' ' -f2)
-        jc_correct=$(echo "$jc_result" | cut -d' ' -f3)
+        jc_result=$(printf '%s' "$jc_response" | validate_json_response "$jccount" "$jcm" || echo "INVALID")
 
-        if [ "$jc_count" = "$jccount" ] && [ "$jc_valid" = "True" ] && [ "$jc_correct" = "True" ]; then
+        if [ "$jc_result" = "VALID" ]; then
             :
         else
-            fail_with_link "[json-comp /json/$jccount?m=$jcm]: count=$jc_count, schema=$jc_valid, correct=$jc_correct" "$JSONCOMP_DOCS"
+            fail_with_link "[json-comp /json/$jccount?m=$jcm]: response violates cardinality, schema, or total contract" "$JSONCOMP_DOCS"
             jc_fail=true
         fi
     done
     if [ "$jc_fail" = "false" ]; then
-        echo "  PASS [json-comp response] (3 counts × multipliers, compressed, full item schema)"
+        echo "  PASS [json-comp response] (3 counts × multipliers, compressed, item cardinality and full schema)"
         PASS=$((PASS + 1))
     fi
 

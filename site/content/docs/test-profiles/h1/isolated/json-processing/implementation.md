@@ -11,9 +11,9 @@ The JSON Processing profile measures how efficiently a framework handles a typic
 ## How it works
 
 1. At startup, the server reads `/data/dataset.json` - a file containing 50 items with mixed types (strings, numbers, booleans, arrays, nested objects)
-2. On each `GET /json/{count}?m={multiplier}` request, the server:
+2. On each `GET /json/{count}` request, optionally with `?m={multiplier}`, the server:
    - Takes the first `count` items from the dataset (1–50)
-   - Computes a `total` field (`price × quantity × m`) for each item - `m` is an integer path-query multiplier that varies per request template
+   - Computes an integer `total` field as `price × quantity × m`, with no rounding. The optional query parameter `m` is an integer and defaults to integer `1` when absent.
    - Builds the response object
    - Serializes everything as JSON
 3. Returns `Content-Type: application/json`
@@ -71,13 +71,13 @@ For `GET /json/5?m=3`:
 }
 ```
 
-The `count` field must match the number of items returned and the route parameter. The `total` field is computed as `price * quantity * m` (all integers - no rounding needed). The server must return the first `count` items from the dataset.
+The `count` field must match the number of items returned and the route parameter. The `total` field is the integer `price * quantity * m`, with no rounding. The optional integer `m` defaults to integer `1` when absent. The server must return the first `count` items from the dataset.
 
 ## Parameters
 
 | Parameter | Value |
 |-----------|-------|
-| Endpoint | `GET /json/{count}?m={multiplier}` |
+| Endpoint | `GET /json/{count}` with optional `?m={multiplier}` (default: integer `1`) |
 | Count × multiplier pairs | `(1,3)`, `(5,7)`, `(10,2)`, `(15,5)`, `(25,4)`, `(40,8)`, `(50,6)` (round-robin) |
 | Connections | 4,096 |
 | Pipeline | 1 |

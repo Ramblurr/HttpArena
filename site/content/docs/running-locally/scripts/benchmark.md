@@ -109,10 +109,13 @@ LOADGEN_DOCKER=true ./scripts/benchmark.sh aspnet-minimal
 
 ### Postgres sidecar
 
-| Variable | Default | Description |
+For ordinary containers, the runner injects `DATABASE_MAX_CONN=256`; exporting another value does not override that path. Compose-orchestrated entries propagate `DATABASE_MAX_CONN` through their `compose.*.yml` and may declare a profile-specific interpolation default.
+
+| Variable | Ordinary-container value | Description |
 |---|---|---|
 | `PG_CONTAINER` | `httparena-postgres` | Name of the sidecar container. |
-| `DATABASE_URL` | `postgres://bench:bench@localhost:5432/benchmark` | Passed to framework containers for `async-db`, `crud`, `api-4`, `api-16`, `gateway-64`, `gateway-h3`, `production-stack`. |
+| `DATABASE_URL` | `postgres://bench:bench@localhost:5432/benchmark` | Passed to framework containers for `async-db`, `crud`, `fortunes`, `api-4`, `api-16`, `gateway-64`, `gateway-h3`, and `production-stack`. |
+| `DATABASE_MAX_CONN` | `256` | Injected with `DATABASE_URL` for ordinary containers; services derive pool sizes from the supplied shared upper bound. Compose files must pass their declared value or profile-specific default to the application service. |
 
 ## Profiles
 

@@ -14,6 +14,10 @@ git clone https://github.com/MDA2AV/HttpArena.git
 cd HttpArena
 ```
 
+## Nix development shell
+
+Run `nix develop` from the repository root to enter a shell with the benchmark tooling. A system-wide Docker daemon is still required.
+
 ## Docker-only path
 
 The fast road: install nothing, let the scripts build everything.

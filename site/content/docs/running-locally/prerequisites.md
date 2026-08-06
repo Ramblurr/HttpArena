@@ -39,6 +39,8 @@ What you need installed before running HttpArena benchmarks locally.
 
 Pick `benchmark-lite.sh` if you just want to sanity-check a framework; pick `benchmark.sh` if you're trying to reproduce leaderboard numbers.
 
+Nix users can run `nix develop` from the repository root to get the benchmark tooling. The Docker daemon and required host permissions remain system requirements.
+
 ## benchmark-lite.sh requirements
 
 Just Docker, bash, python3. Every load-generator image is built from `docker/*.Dockerfile` on first run (first invocation takes a few minutes while `quictls` + `ngtcp2` compile for `h2load-h3`; cached after that).

@@ -3,7 +3,7 @@ title: Implementation Guidelines
 seo_title: "Gateway H3 Benchmark — Implementation Guide"
 description: "Endpoint contract, request and response shapes, and the anti-cheat constraints a framework must satisfy for the Gateway H3 proxy and server stack."
 ---
-{{< type-rules standard="Must ship exactly two services - one HTTP/3-capable reverse proxy and one application server. The proxy must be a widely-used, production-grade server with QUIC support (Caddy, nginx 1.25+ with ngx_http_v3_module, Envoy, HAProxy 2.8+, h2o). No custom QUIC implementations. No caches, load balancers, or additional sidecars beyond the two services. The proxy must serve /static/* directly from disk; the server must serve /baseline2, /json, and /async-db using standard framework middleware." tuned="Same two-service shape as production. May optimize proxy configuration (worker counts, buffer sizes, keepalive tuning, QUIC parameter tuning). May tune the proxy-to-server protocol (h1/h2c/UDS). Server may use any caching or optimization strategy on its own endpoints." engine="No specific rules. May use custom QUIC implementations. Ranked separately from frameworks." >}}
+{{< type-rules standard="Must ship exactly two services - one HTTP/3-capable reverse proxy and one application server. The proxy must be a widely-used, production-grade server with QUIC support (Caddy, nginx 1.25+ with ngx_http_v3_module, Envoy, HAProxy 2.8+, h2o). No custom QUIC implementations. No caches, load balancers, or additional sidecars beyond the two services. The proxy must serve /static/* directly from disk; the server must serve /baseline2, /json, and /async-db using standard framework middleware." tuned="Same two-service shape as Standard. May optimize proxy configuration (worker counts, buffer sizes, keepalive tuning, QUIC parameter tuning). May tune the proxy-to-server protocol (h1/h2c/UDS). Server may use any caching or optimization strategy on its own endpoints." engine="No specific rules. May use custom proxy implementations. Ranked separately from frameworks." >}}
 
 The Gateway-H3 test is the HTTP/3 sibling of [Gateway-64](../gateway-h2/). Same endpoint surface, same two-service shape, same 64-CPU budget, same 20-URI round-robin mix - **the only difference is the edge protocol**. The load generator sends requests over QUIC to port 8443 (UDP), the proxy terminates h3 + TLS, and the upstream backend is still reached over plain h1 (or whatever the entry chooses internally).
 
@@ -124,7 +124,7 @@ The load generator (`h2load-h3`) requests 20 URIs in a round-robin across multip
 | Category | URIs | Count | Weight | Handled by |
 |---|---|---|---|---|
 | Static files | `/static/reset.css`, `components.css`, `app.js`, `vendor.js`, `header.html`, `hero.webp` | 6 | 30% | Proxy |
-| JSON | `/json/{count}` with `count ∈ {1, 5, 10, 15, 25, 40, 50}` | 7 | 35% | Server |
+| JSON | `/json/{count}` with `count ∈ {1, 5, 10, 15, 25, 40, 50}`; optional integer `m` is omitted and therefore defaults to integer `1` | 7 | 35% | Server |
 | Baseline | `/baseline2?a=N&b=M` with 4 distinct parameter combinations | 4 | 20% | Server |
 | Async DB | `/async-db?min=10&max=50&limit=N` with `limit ∈ {10, 25, 50}` | 3 | 15% | Server |
 

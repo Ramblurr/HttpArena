@@ -55,12 +55,13 @@ Each load generator has a pair of variables - native binary name and docker imag
 
 ## Postgres sidecar
 
-Started automatically when the framework subscribes to `async-db`, `api-4`, `api-16`, or `gateway-64`.
+Started automatically for `async-db`, `crud`, `fortunes`, `api-4`, `api-16`, `gateway-64`, `gateway-h3`, and `production-stack`. For ordinary containers, the runner injects both database values; they are framework-container inputs, not caller overrides. Compose-orchestrated entries must propagate both values in their `compose.*.yml`; each entry declares its own `DATABASE_MAX_CONN` value or interpolation default.
 
-| Variable | Default | Description |
+| Variable | Ordinary-container value | Description |
 |---|---|---|
 | `PG_CONTAINER` | `httparena-postgres` | Container name. |
 | `DATABASE_URL` | `postgres://bench:bench@localhost:5432/benchmark` | Exported into the framework container so the app can connect. |
+| `DATABASE_MAX_CONN` | `256` | The runner injects this fixed cap into ordinary database-backed containers. Derive pool sizes from the supplied shared Postgres limit; the sum across process-local pools must not exceed it. `run.sh` also passes `256`; compose entries propagate their declared value or profile-specific default. |
 
 The sidecar uses `postgres:18` (Debian, glibc) with `-c max_connections=256` and is seeded from `data/pgdb-seed.sql`.
 

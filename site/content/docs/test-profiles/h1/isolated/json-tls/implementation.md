@@ -11,7 +11,7 @@ The JSON over TLS profile is the [JSON Processing](../json-processing/implementa
 
 1. The framework loads `/data/dataset.json` at startup (same 50-item mixed-type dataset as the plain `json` profile)
 2. The framework listens on **port 8081** with HTTPS, serving HTTP/1.1 only (ALPN advertises `http/1.1`)
-3. On each `GET /json/{count}?m={multiplier}` request, the server returns the same response shape as the `json` profile: first `count` items with `total = price × quantity × m`, wrapped in `{items, count}`
+3. On each `GET /json/{count}` request, optionally with `?m={multiplier}`, the server returns the same response shape as the `json` profile: first `count` items with integer `total = price × quantity × m`, with no rounding, wrapped in `{items, count}`. Optional integer `m` defaults to integer `1` when absent.
 4. Returns `Content-Type: application/json`
 5. Client sends **no** `Accept-Encoding` header - compression is out of scope for this profile
 
@@ -65,7 +65,7 @@ Body (same as the plain `json` profile):
 
 | Parameter | Value |
 |-----------|-------|
-| Endpoint | `GET /json/{count}?m={multiplier}` |
+| Endpoint | `GET /json/{count}` with optional `?m={multiplier}` (default: integer `1`) |
 | Transport | HTTP/1.1 over TLS |
 | Port | 8081 |
 | ALPN | `http/1.1` |

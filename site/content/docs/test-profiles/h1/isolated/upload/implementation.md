@@ -1,12 +1,12 @@
 ---
 title: Implementation Guidelines
-seo_title: "Large Upload Benchmark (20 MB) — Implementation Guide"
-description: "Endpoint contract, request and response shapes, and the anti-cheat constraints a framework must satisfy for the 20 MB upload benchmark."
+seo_title: "Large Upload Benchmark — Implementation Guide"
+description: "Endpoint contract and anti-cheat rules for exact byte counting across rotating 500 KB, 2 MB, 10 MB, and 20 MB uploads."
 ---
 {{< type-rules standard="Must use the framework standard body reading API. Streaming is allowed if the framework supports it natively." tuned="May use custom buffer sizes, direct socket reads, or bypass framework body parsing for maximum throughput." engine="No specific rules." >}}
 
 
-The Upload profile measures how efficiently a framework handles large request body ingestion. The benchmark rotates across four payload sizes: 500 KB, 2 MB, 10 MB, and 20 MB. The server returns the byte count.
+The Upload profile measures how efficiently a framework handles large request body ingestion. The benchmark rotates through 500 KB, 2 MB, 10 MB, and 20 MB payloads. The server reads each body and returns its exact byte count.
 
 **Connections:** 32, 256
 
@@ -19,9 +19,9 @@ The Upload profile measures how efficiently a framework handles large request bo
 ## What it measures
 
 - **Request body ingestion throughput** - reading large payloads from the network
-- **Memory management** - buffering 20 MB per concurrent request
+- **Memory management** - buffering payloads of up to 20 MB per concurrent request
 - **I/O handling efficiency** - how the framework manages sustained large transfers
-- **Connection overhead** - at 20 MB per request, connection setup/teardown is significant
+- **Connection overhead** - for the largest 20 MB requests, connection setup/teardown is significant
 
 ## Implementation rules
 
@@ -59,5 +59,5 @@ Content-Type: text/plain
 ## Notes
 
 - I/O is the primary bottleneck - body ingestion dominates request handling time
-- Lower connection counts are used because each request transfers 20 MB
+- Lower connection counts are used because requests transfer up to 20 MB
 - The load generator's bandwidth metric only measures response data (~8 bytes), not the uploaded payload
