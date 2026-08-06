@@ -1,7 +1,8 @@
 {
   "display_name": "http-kit",
   "language": "Clojure",
-  "type": "production",
+  "type": "emerging",
+  "mode": "standard",
   "engine": "http-kit",
   "description": "Ring-compatible benchmark entry using the native http-kit server.",
   "repo": "https://github.com/http-kit/http-kit",
@@ -15,5 +16,6 @@
     "upload",
     "static",
     "async-db"
-  ]
+  ],
+  "maintainers": []
 }

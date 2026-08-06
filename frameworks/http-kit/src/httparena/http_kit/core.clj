@@ -4,18 +4,17 @@
    [clojure.data.json :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [next.jdbc :as jdbc]
-   [next.jdbc.connection :as jdbc.connection]
-   [next.jdbc.result-set :as rs]
    [org.httpkit.server :as http-kit]
-   [sqlite4clj.core :as sqlite]
-   [ring.middleware.gzip :refer [wrap-gzip]]
-   [ring.middleware.params :refer [wrap-params]]
-   [ring.util.response :as response])
+   [ring.middleware.gzip :as gzip]
+   [ring.middleware.params :as params]
+   [ring.util.response :as response]
+   [sqlite4clj.core :as sqlite])
   (:import
+   [io.vertx.core Handler Vertx]
+   [io.vertx.pgclient PgBuilder PgConnectOptions]
+   [io.vertx.sqlclient PoolOptions Tuple]
    (java.io InputStream)
-   (java.net URI)
-   (org.postgresql.util PGobject)))
+   (java.net URI)))
 
 (set! *warn-on-reflection* true)
 
@@ -31,8 +30,8 @@
 (def async-db-query
   "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
    FROM items
-   WHERE price BETWEEN ? AND ?
-   LIMIT 50")
+   WHERE price BETWEEN $1 AND $2
+   LIMIT $3")
 (def static-content-types
   {"css" "text/css"
    "js" "application/javascript"
@@ -77,7 +76,7 @@
 (declare compute-json-items)
 
 (defn build-json-body [items]
-  (json/write-str {:items (compute-json-items items)
+  (json/write-str {:items (compute-json-items items 1)
                    :count (count items)}))
 
 (defonce dataset
@@ -99,9 +98,9 @@
 
 (defonce async-db (atom nil))
 
-(defn compute-json-items [items]
+(defn compute-json-items [items multiplier]
   (mapv (fn [{:keys [price quantity] :as item}]
-          (assoc item :total (round2 (* price quantity))))
+          (assoc item :total (round2 (* price quantity multiplier))))
         items))
 
 (defn request-sum [request]
@@ -132,6 +131,17 @@
    :headers {"content-type" json-content-type}
    :body (json/write-str body)})
 
+(defn json-items-response [request]
+  (if-let [source @dataset]
+    (let [uri            (:uri request)
+          [_ path-count] (re-matches #"/json/([0-9]+)" uri)
+          item-count     (if path-count (parse-long-safe path-count) (count source))
+          multiplier     (parse-double-safe (get-in request [:params "m"]) 1.0)
+          items          (take item-count source)]
+      (json-response 200 {:items (compute-json-items items multiplier)
+                          :count (count items)}))
+    (text-response 500 "dataset.json not available")))
+
 (defn compression-response []
   (if-let [body @compression-body]
     {:status 200
@@ -150,46 +160,19 @@
    :rating {:score (:items/rating_score row)
             :count (:items/rating_count row)}})
 
-(defn pg-tags->value [value]
-  (cond
-    (nil? value) []
-    (vector? value) value
-    (sequential? value) (vec value)
-    (instance? PGobject value) (json/read-str (.getValue ^PGobject value))
-    (string? value) (json/read-str ^String value)
-    :else (json/read-str (str value))))
-
-(defn postgres-row->item [row]
-  {:id (:id row)
-   :name (:name row)
-   :category (:category row)
-   :price (:price row)
-   :quantity (:quantity row)
-   :active (boolean (:active row))
-   :tags (pg-tags->value (:tags row))
-   :rating {:score (:rating_score row)
-            :count (:rating_count row)}})
-
-(defn database-url->jdbc-url [database-url]
-  (let [uri (URI. ^String database-url)
-        [username password] (when-let [user-info (.getUserInfo uri)]
-                              (str/split user-info #":" 2))
-        query-parts (cond-> []
-                      (seq (.getQuery uri)) (conj (.getQuery uri))
-                      username (conj (str "user=" username))
-                      password (conj (str "password=" password)))]
-    (str "jdbc:postgresql://" (.getHost uri)
-         (let [port (.getPort uri)]
-           (when-not (neg? port)
-             (str ":" port)))
-         (.getPath uri)
-         (when (seq query-parts)
-           (str "?" (str/join "&" query-parts))))))
+(defn vertx-row->item [row]
+  {:id       (.getInteger row "id")
+   :name     (.getString row "name")
+   :category (.getString row "category")
+   :price    (.getInteger row "price")
+   :quantity (.getInteger row "quantity")
+   :active   (.getBoolean row "active")
+   :tags     (vec (.getList (.getJsonArray row "tags")))
+   :rating   {:score (.getInteger row "rating_score")
+              :count (.getInteger row "rating_count")}})
 
 (defn async-db-pool-size []
-  (let [cpu-target (* 4 (.availableProcessors (Runtime/getRuntime)))
-        max-conn (parse-long-safe (or (System/getenv "DATABASE_MAX_CONN") "256"))]
-    (max 1 (int (min max-conn cpu-target)))))
+  (max 1 (int (parse-long-safe (or (System/getenv "DATABASE_MAX_CONN") "256")))))
 
 (defn init-async-db! []
   (when-let [database-url (System/getenv "DATABASE_URL")]
@@ -197,14 +180,12 @@
         (locking async-db
           (or @async-db
               (try
-                (let [database (jdbc.connection/->pool 'hikari-cp
-                                                       {:jdbc-url (database-url->jdbc-url database-url)
-                                                        :maximum-pool-size (async-db-pool-size)
-                                                        :minimum-idle 0
-                                                        :read-only true
-                                                        :connection-timeout 1000
-                                                        :validation-timeout 1000})]
-                  (jdbc/execute-one! database ["SELECT 1"])
+                (let [database (-> (PgBuilder/pool)
+                                   (.with (doto (PoolOptions.)
+                                            (.setMaxSize (async-db-pool-size))))
+                                   (.connectingTo (PgConnectOptions/fromUri database-url))
+                                   (.using (Vertx/vertx))
+                                   (.build))]
                   (reset! async-db database))
                 (catch Throwable _
                   nil)))))))
@@ -224,21 +205,28 @@
                         :count (count items)})))
 
 (defn async-db-response [request]
-  (let [params (:params request)
-        min-price (parse-double-safe (get params "min") 10.0)
-        max-price (parse-double-safe (get params "max") 50.0)
-        database (init-async-db!)
-        items (if database
-                (try
-                  (mapv postgres-row->item
-                        (jdbc/execute! database
-                                       [async-db-query min-price max-price]
-                                       {:builder-fn rs/as-unqualified-lower-maps}))
-                  (catch Throwable _
-                    []))
-                [])]
-    (json-response 200 {:items items
-                        :count (count items)})))
+  (let [params    (:params request)
+        min-price (parse-long-safe (get params "min" "10"))
+        max-price (parse-long-safe (get params "max" "50"))
+        limit     (min 50 (max 1 (parse-long-safe (get params "limit" "50"))))
+        database  (init-async-db!)]
+    (if database
+      (http-kit/as-channel
+       request
+       {:on-open (fn [channel]
+                   (-> (.preparedQuery database async-db-query)
+                       (.execute (Tuple/of min-price max-price limit))
+                       (.onComplete
+                        (reify Handler
+                          (handle [_ result]
+                            (http-kit/send!
+                             channel
+                             (if (.succeeded result)
+                               (let [items (mapv vertx-row->item (.result result))]
+                                 (json-response 200 {:items items
+                                                     :count (count items)}))
+                               (json-response 200 {:items [] :count 0}))))))))})
+      (json-response 200 {:items [] :count 0}))))
 
 (defn static-filename [uri]
   (when (str/starts-with? uri "/static/")
@@ -264,21 +252,20 @@
     file-response
     (case (:uri request)
       "/baseline11" (text-response 200 (str (request-sum request)))
-      "/json" (if-let [source @dataset]
-                (json-response 200 {:items (compute-json-items source)
-                                    :count (count source)})
-                (text-response 500 "dataset.json not available"))
+      "/json" (json-items-response request)
       "/compression" (compression-response)
       "/db" (db-response request)
       "/async-db" (async-db-response request)
       "/upload" (text-response 200 (str (count-stream-bytes (:body request))))
       "/pipeline" (text-response 200 "ok")
-      (text-response 404 "not found"))))
+      (if (re-matches #"/json/[0-9]+" (:uri request))
+        (json-items-response request)
+        (text-response 404 "not found")))))
 
 (def handler
   (-> app
-      wrap-params
-      wrap-gzip))
+      params/wrap-params
+      gzip/wrap-gzip))
 
 (defn -main [& _args]
   (init-async-db!)
