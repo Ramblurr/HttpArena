@@ -112,5 +112,5 @@ The resulting per-profile score feeds into the composite like every other profil
 
 - **A framework that picks brotli can dominate even at lower rps**, provided the smaller bytes-per-response wins back more score than the rps gap costs. This reflects real-world bandwidth-constrained serving.
 - **Gzip-only frameworks are competitive when their compression level is aggressive enough** to keep `myBpr` near the brotli leader. The formula rewards ratio, not the specific encoding chosen.
-- **Pre-computed compressed payloads are out of the question for `production` type** - the type rules require the response pipeline to actually compress per-request. See [type rules](/docs/add-framework/meta-json/#type-rules).
+- **Pre-computed compressed payloads are forbidden in Standard mode** - the rules require the response pipeline to compress each response per request. See the [Standard implementation rules](/docs/add-framework/implementation-rules/frameworks/standard/).
 - **The best-conn-count panel on the profile tab can rank differently from the composite column**, because one picks the highest-scoring conn count and the other averages. Both are intentional: the profile tab answers "which framework wins at its best setting?"; the composite answers "which framework is most consistent across loads?".

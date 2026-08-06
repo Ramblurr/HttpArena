@@ -34,9 +34,9 @@ All requests include `Accept-Encoding: br;q=1, gzip;q=0.8`, indicating the clien
 
 - **Text files** (CSS, JS, HTML, SVG, JSON): good candidates for compression (68–94% size reduction with brotli)
 - **Binary files** (woff2, webp): already compressed formats - servers should skip compression for these
-- **Pre-compressed files**: `.gz` and `.br` versions are available on disk. Frameworks that support serving pre-compressed files via a documented API (e.g. Nginx `gzip_static`/`brotli_static`, Caddy `precompressed`, ASP.NET `MapStaticAssets`) can serve these directly with zero CPU overhead - this is allowed for both **production** and **tuned** entries.
+- **Pre-compressed files**: `.gz` and `.br` versions are available on disk. Frameworks that support serving pre-compressed files via a documented API (e.g. Nginx `gzip_static`/`brotli_static`, Caddy `precompressed`, ASP.NET `MapStaticAssets`) can serve these directly with zero CPU overhead - this is allowed for both **Standard** and **Tuned** entries.
 
-**Production rule:** compression must come from the framework's standard middleware, built-in static file handler, or its documented pre-compressed-file API. No handmade compression code, no custom suffix-lookup logic.
+**Standard rule:** compression must come from the framework's standard middleware, built-in static file handler, or its documented pre-compressed-file API. No handmade compression code, no custom suffix-lookup logic.
 
 **Tuned rule:** free to use any approach - custom compression, manual `.br`/`.gz` lookup, etc.
 

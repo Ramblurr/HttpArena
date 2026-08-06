@@ -11,3 +11,9 @@ Every entry declares a **type** in `meta.json` - what it is and how it is ranked
   {{< card link="frameworks" title="Frameworks" subtitle="Flagship, Emerging and Experimental tiers - run in Standard or Tuned mode." icon="collection" >}}
   {{< card link="engine" title="Engine" subtitle="Bare-metal HTTP implementations (raw sockets, custom parser). Ranked separately." icon="lightning-bolt" >}}
 {{< /cards >}}
+
+## Classify the submitted stack
+
+Classify the complete runtime stack in the submission, not only the named listener library. A maintained composition that handles requests through documented framework middleware or adapters may be a framework entry. A submission that implements protocol handling directly, without a framework request-handling layer, is an engine entry.
+
+Under this rule, the `http-kit`, `pedestal`, `ring`, and `ring-jetty9-adapter` submissions are Emerging framework entries.
