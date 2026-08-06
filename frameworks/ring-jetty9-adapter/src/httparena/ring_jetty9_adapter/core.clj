@@ -3,14 +3,14 @@
   (:require
    [clojure.data.json :as json]
    [clojure.java.io :as io]
+   [clojure.string :as str]
    [next.jdbc :as jdbc]
    [next.jdbc.connection :as jdbc.connection]
    [next.jdbc.result-set :as rs]
-   [sqlite4clj.core :as sqlite]
    [ring.adapter.jetty9 :refer [run-jetty]]
-   [clojure.string :as str]
    [ring.middleware.params :refer [wrap-params]]
-   [ring.util.response :as response])
+   [ring.util.response :as response]
+   [sqlite4clj.core :as sqlite])
   (:import
    (java.io InputStream)
    (java.net URI)
