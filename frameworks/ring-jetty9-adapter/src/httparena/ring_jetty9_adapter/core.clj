@@ -12,7 +12,7 @@
    (io.vertx.core.json JsonArray)
    (io.vertx.pgclient PgBuilder PgConnectOptions)
    (io.vertx.sqlclient ClientBuilder Pool PoolOptions PreparedQuery Row RowSet Tuple)
-   (java.io InputStream)
+   (java.io InputStream OutputStream)
    (org.eclipse.jetty.server.handler.gzip GzipHandler)))
 
 (set! *warn-on-reflection* true)
@@ -67,13 +67,8 @@
     (+ a b body)))
 
 (defn count-stream-bytes [^InputStream in]
-  (with-open [stream in]
-    (let [buffer (byte-array 16384)]
-      (loop [total 0]
-        (let [read-count (.read stream buffer 0 (alength buffer))]
-          (if (neg? read-count)
-            total
-            (recur (+ total read-count))))))))
+  (with-open [^InputStream stream in]
+    (.transferTo stream (OutputStream/nullOutputStream))))
 
 (defn text-response [status body]
   {:status status
@@ -119,8 +114,8 @@
   (let [^AsyncResult async-result result]
     (if (.succeeded async-result)
       (try
-        (let [^RowSet rows (.result async-result)
-              items (mapv postgres-row->item rows)]
+        (let [^RowSet rows  (.result async-result)
+              items         (mapv postgres-row->item rows)]
           (respond (json-response 200 {:items items
                                        :count (count items)})))
         (catch Throwable error
@@ -128,21 +123,21 @@
       (respond (json-response 200 {:items [] :count 0})))))
 
 (defn async-db-response [request respond raise]
-  (let [params (:params request)
-        min-price (parse-long-safe (get params "min" "10"))
-        max-price (parse-long-safe (get params "max" "50"))
-        limit (-> (get params "limit" "50")
-                  parse-long-safe
-                  (max 1)
-                  (min 50))
+  (let [params         (:params request)
+        min-price      (parse-long-safe (get params "min" "10"))
+        max-price      (parse-long-safe (get params "max" "50"))
+        limit          (-> (get params "limit" "50")
+                           parse-long-safe
+                           (max 1)
+                           (min 50))
         ^Pool database (init-async-db!)]
     (if database
-      (let [^PreparedQuery query (.preparedQuery database async-db-query)
-            ^Tuple query-params (doto (Tuple/tuple)
-                                  (.addInteger (int min-price))
-                                  (.addInteger (int max-price))
-                                  (.addInteger (int limit)))
-            ^Future query-result (.execute query query-params)]
+      (let [^PreparedQuery query  (.preparedQuery database async-db-query)
+            ^Tuple query-params   (doto (Tuple/tuple)
+                                    (.addInteger (int min-price))
+                                    (.addInteger (int max-price))
+                                    (.addInteger (int limit)))
+            ^Future query-result  (.execute query query-params)]
         (.onComplete query-result
                      (reify Handler
                        (handle [_ result]
@@ -167,12 +162,12 @@
 (defn static-response [uri]
   (when-let [filename (static-filename uri)]
     (if-let [file-response (response/file-response filename {:root static-root
-                                                            :index-files? false})]
+                                                             :index-files? false})]
       (response/content-type file-response (static-content-type filename))
       (text-response 404 "not found"))))
 
 (defn json-data-response [request]
-  (let [uri (:uri request)
+  (let [uri        (:uri request)
         item-count (-> (subs uri (count "/json/"))
                        parse-long-safe
                        (max 1)
@@ -187,7 +182,7 @@
       (text-response 500 "dataset.json not available"))))
 
 (defn sync-app [request]
-  (let [uri (:uri request)
+  (let [uri    (:uri request)
         method (:request-method request)]
     (cond
       (str/starts-with? uri "/static/")
