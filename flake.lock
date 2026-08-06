@@ -1,0 +1,44 @@
+{
+  "nodes": {
+    "gcannon-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1775384234,
+        "narHash": "sha256-q5cS2o1z1pSoy2G5DiS5RPkJvsYOovpgBQb+GFl7EtM=",
+        "owner": "MDA2AV",
+        "repo": "gcannon",
+        "rev": "5e25f185785966424ae027cc165c85ed855d448c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "MDA2AV",
+        "repo": "gcannon",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1767313136,
+        "narHash": "sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-25.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "gcannon-src": "gcannon-src",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
