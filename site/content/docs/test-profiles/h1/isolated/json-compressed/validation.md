@@ -31,11 +31,12 @@ The optional `m` query parameter is an integer and defaults to integer `1` when 
 
 For each response, after decompressing, the validator checks:
 
-1. The response `count` field equals the route count
-2. Every item contains the required fields; `tags` is an array, `active` is a boolean, and `rating` is an object containing `score` and `count`
-3. Each numeric `total` equals `price * quantity * m`
+1. The response `count` is an integer equal to the route count, and `items` contains exactly that many entries
+2. Every item has the documented types: `id`, `price`, `quantity`, `rating.score`, `rating.count`, and `total` are integers; `name` and `category` are strings; `tags` is an array of strings; and `active` is a boolean
+3. Boolean values are rejected for integer fields
+4. Each `total` equals the integer product `price * quantity * m`, with no rounding
 
-The endpoint contract separately requires exactly `count` items and an integer `total` computed with no rounding. These checks currently verify the response count field, required structure, and numeric arithmetic equality after decompression. Missing fields or incorrect arithmetic fail validation.
+Missing fields, invalid types, forged counts, or incorrect arithmetic fail validation after decompression.
 
 ### No Content-Encoding when Accept-Encoding is absent
 

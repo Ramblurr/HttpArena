@@ -10,11 +10,10 @@ The following checks are executed by `validate.sh` for every framework subscribe
 
 Sends `GET /json/{count}?m={multiplier}` for `(count, m)` pairs **`(12,3)`, `(22,7)`, `(31,2)`, and `(50,5)`** (different from the benchmark pairs to prevent hardcoded responses). The optional `m` query parameter is an integer and defaults to integer `1` when absent. For each request, validation verifies:
 
-- The response `count` field equals the requested count
-- Every item contains the required fields; `tags` is an array, `active` is a boolean, and `rating` is an object containing `score` and `count`
-- Each numeric `total` equals `price * quantity * m`
-
-The endpoint contract separately requires exactly `count` items and an integer `total` computed with no rounding. These checks currently verify the response count field, required structure, and numeric arithmetic equality.
+- The response `count` is an integer equal to the requested count, and `items` contains exactly that many entries
+- Every item has the documented types: `id`, `price`, `quantity`, `rating.score`, `rating.count`, and `total` are integers; `name` and `category` are strings; `tags` is an array of strings; and `active` is a boolean
+- Boolean values are rejected for integer fields
+- Each `total` equals the integer product `price * quantity * m`, with no rounding
 
 ## Content-Type header
 

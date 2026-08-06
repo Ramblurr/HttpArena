@@ -18,6 +18,10 @@ Sends `POST /baseline11?a=13&b=42` with body `20` and `Content-Type: text/plain`
 
 Sends `POST /baseline11?a=13&b=42` with body `20` and `Transfer-Encoding: chunked`. Verifies the response body is `75`.
 
+## Response Content-Type
+
+The validator checks both the GET and Content-Length POST responses for `Content-Type: text/plain`. A charset parameter is allowed.
+
 ## Anti-cheat: randomized query parameters
 
 Generates random values for `a` and `b` (100-999), sends `GET /baseline11?a={a}&b={b}`, and verifies the response matches the expected sum. This detects hardcoded responses.
@@ -39,3 +43,7 @@ Every fragmented request sets `Connection: close` so the server closes the socke
 - **Split before headers** - the request line arrives in one write, then each header line arrives in its own write (`Host:`, `User-Agent:`, `Connection:`). Expects body `55`.
 - **POST split headers/body** - the full header block (including terminating `\r\n\r\n`) is one write, then the body arrives in a separate write after the pause. Expects body `75`.
 - **POST split body bytes** - headers in one write, then the 2-byte body (`"20"`) arrives as two 1-byte writes. Stresses the parser's ability to reassemble a Content-Length body across multiple `recv()` calls. Expects body `75`.
+
+## Lowercase request header names
+
+Sends a raw POST with lowercase `host`, `content-type`, `content-length`, and `connection` field names. The body is `20`, and the expected response is `75`. This verifies HTTP/1.1 field-name matching is case-insensitive.
