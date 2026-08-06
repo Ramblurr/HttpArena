@@ -67,6 +67,8 @@ cd HttpArena
 ./scripts/benchmark.sh <framework> --save    # save results
 ```
 
+Nix users can run `nix develop` to enter a development shell with the benchmark tooling. A system-wide Docker daemon is still required.
+
 ## Contributing
 
 - [Add a new framework](https://www.http-arena.com/#doc=add-framework)
