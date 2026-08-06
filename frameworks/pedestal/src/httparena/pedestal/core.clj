@@ -37,28 +37,14 @@
    "webp" "image/webp"
    "json" "application/json"})
 
-(defn parse-long-safe [value]
-  (or (some-> value str str/trim parse-long) 0))
-
-(defn parse-double-safe [value default]
-  (cond
-    (nil? value) default
-    (string? value)
-    (let [trimmed (.trim ^String value)]
-      (if (.isEmpty trimmed)
-        default
-        (try
-          (Double/parseDouble trimmed)
-          (catch NumberFormatException _
-            default))))
-    :else
-    (recur (str value) default)))
+(defn parse-long-safe
+  ([value]
+   (parse-long-safe value 0))
+  ([value default]
+   (or (some-> value str str/trim parse-long) default)))
 
 (defn async-db-pool-size []
   (max 1 (int (parse-long-safe (or (System/getenv "DATABASE_MAX_CONN") "256")))))
-
-(defn round2 [value]
-  (/ (Math/round (* (double value) 100.0)) 100.0))
 
 (defn load-dataset [path]
   (when (.exists (io/file path))
@@ -71,7 +57,7 @@
 
 (defn compute-json-items [items multiplier]
   (mapv (fn [{:keys [price quantity] :as item}]
-          (assoc item :total (round2 (* price quantity multiplier))))
+          (assoc item :total (* price quantity multiplier)))
         items))
 
 (defn request-sum [request]
@@ -103,7 +89,7 @@
   (if-let [source @dataset]
     (let [requested-count (min (parse-long-safe (get-in request [:path-params :count]))
                                (count source))
-          multiplier      (parse-double-safe (get-in request [:query-params :m]) 1.0)
+          multiplier      (parse-long-safe (get-in request [:query-params :m]) 1)
           items           (compute-json-items (take requested-count source) multiplier)]
       (json-response 200 {:items items
                           :count (count items)}))
@@ -211,8 +197,7 @@
       (conn/with-interceptor route/query-params)
       (conn/with-routes routes)
       (jetty/create-connector
-       {:container-options {:h2c? false
-                            :context-configurator (fn [^ServletContextHandler context]
+       {:container-options {:context-configurator (fn [^ServletContextHandler context]
                                                     (let [gzip-handler (doto (GzipHandler.)
                                                                          (.addExcludedPaths
                                                                           (into-array String ["/static/*"])))]
@@ -220,4 +205,7 @@
                                                       context))}})))
 
 (defn -main [& _args]
+  (when-not (vector? @dataset)
+    (throw (ex-info "dataset.json must contain a JSON array"
+                    {:path "/data/dataset.json"})))
   (conn/start! (create-connector)))
