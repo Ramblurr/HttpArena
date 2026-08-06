@@ -5,6 +5,7 @@
   "engine": "Jetty",
   "description": "Ring application using the official Ring Jetty adapter and standard Ring middleware.",
   "repo": "https://github.com/ring-clojure/ring",
+  "maintainers": [],
   "enabled": true,
   "tests": [
     "baseline",
