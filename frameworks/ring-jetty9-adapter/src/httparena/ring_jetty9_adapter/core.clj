@@ -229,6 +229,9 @@
        (raise error)))))
 
 (defn -main [& _args]
+  (when-not (vector? @dataset)
+    (throw (ex-info "dataset.json must contain a JSON array"
+                    {:path "/data/dataset.json"})))
   (jetty/run-jetty handler
                    {:async? true
                     :host "0.0.0.0"
