@@ -34,16 +34,12 @@
    "webp" "image/webp"
    "json" "application/json"})
 
-(defn parse-long-safe [value]
-  (or (some-> value str str/trim not-empty parse-long)
-      0))
-
-(defn parse-double-safe [value default]
-  (or (some-> value str str/trim not-empty parse-double)
-      default))
-
-(defn round2 [value]
-  (/ (Math/round (* (double value) 100.0)) 100.0))
+(defn parse-long-safe
+  ([value]
+   (parse-long-safe value 0))
+  ([value default]
+   (or (some-> value str str/trim not-empty parse-long)
+       default)))
 
 (defn load-dataset [path]
   (when (.exists (io/file path))
@@ -56,7 +52,7 @@
 
 (defn compute-json-items [items multiplier]
   (mapv (fn [{:keys [price quantity] :as item}]
-          (assoc item :total (round2 (* price quantity multiplier))))
+          (assoc item :total (* price quantity multiplier)))
         items))
 
 (defn request-sum [request]
@@ -87,7 +83,7 @@
     (let [uri            (:uri request)
           [_ path-count] (re-matches #"/json/([0-9]+)" uri)
           item-count     (if path-count (parse-long-safe path-count) (count source))
-          multiplier     (parse-double-safe (get-in request [:params "m"]) 1.0)
+          multiplier     (parse-long-safe (get-in request [:params "m"]) 1)
           items          (take item-count source)]
       (json-response 200 {:items (compute-json-items items multiplier)
                           :count (count items)}))
@@ -189,6 +185,9 @@
         (compressed-handler request)))))
 
 (defn -main [& _args]
+  (when-not (vector? @dataset)
+    (throw (ex-info "dataset.json must contain a JSON array"
+                    {:path "/data/dataset.json"})))
   (init-async-db!)
   (http-kit/run-server handler {:ip "0.0.0.0"
                                 :max-body max-request-body-bytes
