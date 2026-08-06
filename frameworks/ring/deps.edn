@@ -2,7 +2,7 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}
         org.clojure/data.json {:mvn/version "2.5.2"}
         io.vertx/vertx-pg-client {:mvn/version "5.1.6"}
-        andersmurphy/sqlite4clj {:git/url "https://github.com/andersmurphy/sqlite4clj"
-                                 :git/sha "fa3c54c378e34cd8c7736a714f7e48c4cb0c1f8f"}
         ring/ring-core {:mvn/version "1.15.5"}
-        ring/ring-jetty-adapter {:mvn/version "1.15.5"}}}
+        ring/ring-jetty-adapter {:mvn/version "1.15.5"}}
+ :aliases {:test {:extra-paths ["test"]
+                  :main-opts ["-m" "httparena.ring.core-test"]}}}

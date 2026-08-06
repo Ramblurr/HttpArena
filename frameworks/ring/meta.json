@@ -1,7 +1,8 @@
 {
   "display_name": "ring",
   "language": "Clojure",
-  "type": "production",
+  "type": "emerging",
+  "mode": "standard",
   "engine": "Jetty",
   "description": "Ring application using the official Ring Jetty adapter and standard Ring middleware.",
   "repo": "https://github.com/ring-clojure/ring",
