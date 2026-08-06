@@ -177,7 +177,7 @@
         "description": "Test Profile",
         "url": "https://www.http-arena.com/docs/test-profiles/ws/echo/"
       }
-    },
+    }
   ],
   "paths": {
     "/baseline11": {
@@ -1016,7 +1016,7 @@
           }
         }
       }
-    },
+    }
   },
   "components": {
     "schemas": {
@@ -1129,7 +1129,7 @@
           "total": {
             "type": "integer",
             "format": "int64",
-            "description": "Computed per request as `price × quantity × m`",
+            "description": "Integer computed per request as `price × quantity × m`, with no rounding",
             "example": 14760
           }
         }

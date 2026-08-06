@@ -28,11 +28,11 @@ Three requests are sent over HTTPS on port 8081 with different counts and multip
 
 For each response the validator checks:
 
-1. `count` field equals the route count
-2. Every item in `items` contains the full schema - `id`, `name`, `category`, `price`, `quantity`, `active`, `tags` (array), `rating` (object with `score` and `count`), and `total`
-3. `total == price * quantity * m` for every item (integer, exact)
+1. The response `count` field equals the route count
+2. Every item contains the required fields; `tags` is an array, `active` is a boolean, and `rating` is an object containing `score` and `count`
+3. Each numeric `total` equals `price * quantity * m`
 
-These `(count, m)` pairs are deliberately **different** from the `json-comp` validation pairs so a framework that tries to cache validation results across profiles can't pass both.
+The endpoint contract separately requires exactly `count` items and an integer `total` computed with no rounding. These checks currently verify the response count field, required structure, and numeric arithmetic equality. The `(count, m)` pairs are deliberately **different** from the `json-comp` validation pairs so a framework that tries to cache validation results across profiles cannot pass both.
 
 ### Content-Type is application/json
 

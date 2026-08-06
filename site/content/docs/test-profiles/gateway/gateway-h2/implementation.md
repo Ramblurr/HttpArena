@@ -215,7 +215,7 @@ The load generator ([h2load](https://nghttp2.org/documentation/h2load-howto.html
 | Category | URIs | Count | Weight | Handled by |
 |---|---|---|---|---|
 | Static files | `/static/reset.css`, `components.css`, `app.js`, `vendor.js`, `header.html`, `hero.webp` - a mix of CSS, JS, HTML, and an image for `sendfile`-path coverage | 6 | 30% | Proxy |
-| JSON | `/json/{count}` with `count ∈ {1, 5, 10, 15, 25, 40, 50}` - 7 payload sizes, same set as the h1-isolated JSON profile | 7 | 35% | Server |
+| JSON | `/json/{count}` with `count ∈ {1, 5, 10, 15, 25, 40, 50}` - 7 payload sizes; optional integer `m` is omitted and therefore defaults to integer `1` | 7 | 35% | Server |
 | Baseline | `/baseline2?a=N&b=M` with 4 distinct parameter combinations to defeat URI-keyed caches | 4 | 20% | Server |
 | Async DB | `/async-db?min=10&max=50&limit=N` with `limit ∈ {10, 25, 50}` | 3 | 15% | Server |
 

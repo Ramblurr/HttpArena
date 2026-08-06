@@ -43,13 +43,13 @@ Sends `GET /static/nonexistent.txt` over HTTP/2 and verifies the response is **H
 
 ### Response structure
 
-Sends `GET /json` over HTTP/2 and validates:
+Sends `GET /json/50` over HTTP/2. This gateway request omits optional `m`, so it defaults to integer `1`. Validation checks:
 
-- Response contains exactly **50 items**
-- Every item carries the full schema - `id`, `name`, `category`, `price`, `quantity`, `active`, `tags` (array), `rating` (object with `score` and `count`), and `total`
-- Each `total` is correctly computed as `price * quantity` (rounded to 2 decimal places)
+- The response `count` field equals **50**
+- Every item contains the required fields; `tags` is an array, `active` is a boolean, and `rating` is an object containing `score` and `count`
+- Each numeric `total` matches `price * quantity` within the validator's configured tolerance
 
-This is the same validation as the [JSON Processing test](../../h1/isolated/json-processing/validation), but routed through the proxy.
+The canonical endpoint contract requires exactly 50 items and integer `total = price * quantity * 1`, with no rounding. This gateway check currently verifies the response count field, required structure, and numeric arithmetic within its tolerance. It exercises the same endpoint contract as the [JSON Processing test](../../h1/isolated/json-processing/validation), but through the proxy.
 
 ### Content-Type header
 

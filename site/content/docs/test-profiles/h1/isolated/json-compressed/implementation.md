@@ -10,9 +10,9 @@ The JSON Compressed profile is the same workload as [JSON Processing](../json-pr
 ## How it works
 
 1. Server reads `/data/dataset.json` at startup (same 50-item dataset as JSON Processing)
-2. On each `GET /json/{count}?m={multiplier}` request, the server:
+2. On each `GET /json/{count}` request, optionally with `?m={multiplier}`, the server:
    - Takes the first `count` items from the dataset (1–50)
-   - Computes `total = price × quantity × m` per item
+   - Computes integer `total = price × quantity × m` per item, with no rounding; optional integer `m` defaults to integer `1` when absent
    - Serializes to JSON
    - Compresses the response body with gzip or brotli
    - Returns `Content-Type: application/json` and `Content-Encoding: gzip` (or `br`)
@@ -58,13 +58,13 @@ Decompressed body:
 }
 ```
 
-`total` is `price * quantity * m` - integer arithmetic, no rounding. For `GET /json/5?m=1`, `total` equals `price * quantity`; the multiplier is never implicitly 1.
+`total` is the integer `price * quantity * m`, with no rounding. The optional integer `m` defaults to integer `1` when absent, so both `GET /json/5` and `GET /json/5?m=1` compute `total` as `price * quantity`.
 
 ## Parameters
 
 | Parameter | Value |
 |-----------|-------|
-| Endpoint | `GET /json/{count}?m={multiplier}` |
+| Endpoint | `GET /json/{count}` with optional `?m={multiplier}` (default: integer `1`) |
 | Counts × multipliers | (25,4), (40,8), (50,6) (round-robin) |
 | Connections | 512, 4096, 16384 |
 | Pipeline | 1 |
