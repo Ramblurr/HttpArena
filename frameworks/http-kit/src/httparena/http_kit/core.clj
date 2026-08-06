@@ -171,7 +171,6 @@
 (defn app [request]
   (case (:uri request)
     "/baseline11" (text-response 200 (str (request-sum request)))
-    "/json" (json-items-response request)
     "/async-db" (async-db-response request)
     "/upload" (text-response 200 (str (count-stream-bytes (:body request))))
     "/pipeline" (text-response 200 "ok")
