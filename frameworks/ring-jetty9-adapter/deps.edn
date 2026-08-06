@@ -1,0 +1,10 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
+        org.clojure/data.json {:mvn/version "2.5.2"}
+        com.github.seancorfield/next.jdbc {:mvn/version "1.3.1093"}
+        hikari-cp/hikari-cp {:mvn/version "4.0.0"}
+        org.postgresql/postgresql {:mvn/version "42.7.10"}
+        andersmurphy/sqlite4clj {:git/url "https://github.com/andersmurphy/sqlite4clj"
+                                 :git/sha "abb1c31224f02b6b7025ce5f40157c41046db8b0"}
+        ring/ring-core {:mvn/version "1.15.3"}
+        info.sunng/ring-jetty9-adapter {:mvn/version "0.39.2"}}}
