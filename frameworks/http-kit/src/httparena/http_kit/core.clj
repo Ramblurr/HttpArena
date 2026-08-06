@@ -7,26 +7,19 @@
    [org.httpkit.server :as http-kit]
    [ring.middleware.gzip :as gzip]
    [ring.middleware.params :as params]
-   [ring.util.response :as response]
-   [sqlite4clj.core :as sqlite])
+   [ring.util.response :as response])
   (:import
-   [io.vertx.core Handler Vertx]
+   [io.vertx.core AsyncResult Handler Vertx]
    [io.vertx.pgclient PgBuilder PgConnectOptions]
-   [io.vertx.sqlclient PoolOptions Tuple]
-   (java.io InputStream)
-   (java.net URI)))
+   [io.vertx.sqlclient Pool PoolOptions Row RowSet Tuple]
+   (java.io InputStream OutputStream)))
 
 (set! *warn-on-reflection* true)
 
 (def json-content-type "application/json")
 (def max-request-body-bytes (* 32 1024 1024))
 (def static-root "/data/static")
-(def benchmark-db-path "/data/benchmark.db")
-(def db-query
-  "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
-   FROM items
-   WHERE price BETWEEN ? AND ?
-   LIMIT 50")
+
 (def async-db-query
   "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
    FROM items
@@ -42,29 +35,12 @@
    "json" "application/json"})
 
 (defn parse-long-safe [value]
-  (cond
-    (nil? value) 0
-    (string? value)
-    (let [trimmed (.trim ^String value)]
-      (if (.isEmpty trimmed)
-        0
-        (Long/parseLong trimmed)))
-    :else
-    (recur (str value))))
+  (or (some-> value str str/trim not-empty parse-long)
+      0))
 
 (defn parse-double-safe [value default]
-  (cond
-    (nil? value) default
-    (string? value)
-    (let [trimmed (.trim ^String value)]
-      (if (.isEmpty trimmed)
-        default
-        (try
-          (Double/parseDouble trimmed)
-          (catch NumberFormatException _
-            default))))
-    :else
-    (recur (str value) default)))
+  (or (some-> value str str/trim not-empty parse-double)
+      default))
 
 (defn round2 [value]
   (/ (Math/round (* (double value) 100.0)) 100.0))
@@ -73,28 +49,8 @@
   (when (.exists (io/file path))
     (json/read-str (slurp path) :key-fn keyword)))
 
-(declare compute-json-items)
-
-(defn build-json-body [items]
-  (json/write-str {:items (compute-json-items items 1)
-                   :count (count items)}))
-
 (defonce dataset
   (delay (load-dataset "/data/dataset.json")))
-
-(defonce compression-body
-  (delay
-    (some-> (load-dataset "/data/dataset-large.json")
-            build-json-body)))
-
-(defonce db
-  (delay
-    (when (.exists (io/file benchmark-db-path))
-      (let [database (sqlite/init-db! benchmark-db-path
-                                      {:pool-size (max 1 (.availableProcessors (Runtime/getRuntime)))
-                                       :default-result-set-fn sqlite/qualified-keyword-result-set-fn})]
-        (sqlite/q (:reader database) ["SELECT 1"])
-        database))))
 
 (defonce async-db (atom nil))
 
@@ -113,13 +69,8 @@
     (+ a b body)))
 
 (defn count-stream-bytes [^InputStream in]
-  (with-open [stream in]
-    (let [buffer (byte-array 16384)]
-      (loop [total 0]
-        (let [read-count (.read stream buffer 0 (alength buffer))]
-          (if (neg? read-count)
-            total
-            (recur (+ total read-count))))))))
+  (with-open [^InputStream stream in]
+    (.transferTo stream (OutputStream/nullOutputStream))))
 
 (defn text-response [status body]
   {:status status
@@ -142,25 +93,7 @@
                           :count (count items)}))
     (text-response 500 "dataset.json not available")))
 
-(defn compression-response []
-  (if-let [body @compression-body]
-    {:status 200
-     :headers {"content-type" json-content-type}
-     :body body}
-    (text-response 500 "dataset-large.json not available")))
-
-(defn sqlite-row->item [row]
-  {:id (:items/id row)
-   :name (:items/name row)
-   :category (:items/category row)
-   :price (:items/price row)
-   :quantity (:items/quantity row)
-   :active (not (zero? (long (:items/active row))))
-   :tags (json/read-str ^String (:items/tags row))
-   :rating {:score (:items/rating_score row)
-            :count (:items/rating_count row)}})
-
-(defn vertx-row->item [row]
+(defn vertx-row->item [^Row row]
   {:id       (.getInteger row "id")
    :name     (.getString row "name")
    :category (.getString row "category")
@@ -190,26 +123,12 @@
                 (catch Throwable _
                   nil)))))))
 
-(defn db-response [request]
-  (let [params (:params request)
-        min-price (parse-double-safe (get params "min") 10.0)
-        max-price (parse-double-safe (get params "max") 50.0)
-        items (if-let [database @db]
-                (try
-                  (mapv sqlite-row->item
-                        (or (sqlite/q (:reader database) [db-query min-price max-price]) []))
-                  (catch Throwable _
-                    []))
-                [])]
-    (json-response 200 {:items items
-                        :count (count items)})))
-
 (defn async-db-response [request]
-  (let [params    (:params request)
-        min-price (parse-long-safe (get params "min" "10"))
-        max-price (parse-long-safe (get params "max" "50"))
-        limit     (min 50 (max 1 (parse-long-safe (get params "limit" "50"))))
-        database  (init-async-db!)]
+  (let [params         (:params request)
+        min-price      (parse-long-safe (get params "min" "10"))
+        max-price      (parse-long-safe (get params "max" "50"))
+        limit          (min 50 (max 1 (parse-long-safe (get params "limit" "50"))))
+        ^Pool database (init-async-db!)]
     (if database
       (http-kit/as-channel
        request
@@ -219,13 +138,15 @@
                        (.onComplete
                         (reify Handler
                           (handle [_ result]
-                            (http-kit/send!
-                             channel
-                             (if (.succeeded result)
-                               (let [items (mapv vertx-row->item (.result result))]
-                                 (json-response 200 {:items items
-                                                     :count (count items)}))
-                               (json-response 200 {:items [] :count 0}))))))))})
+                            (let [^AsyncResult async-result result]
+                              (http-kit/send!
+                               channel
+                               (if (.succeeded async-result)
+                                 (let [^RowSet rows (.result async-result)
+                                       items        (mapv vertx-row->item rows)]
+                                   (json-response 200 {:items items
+                                                       :count (count items)}))
+                                 (json-response 200 {:items [] :count 0})))))))))})
       (json-response 200 {:items [] :count 0}))))
 
 (defn static-filename [uri]
@@ -243,29 +164,30 @@
 (defn static-response [uri]
   (when-let [filename (static-filename uri)]
     (if-let [file-response (response/file-response filename {:root static-root
-                                                            :index-files? false})]
+                                                             :index-files? false})]
       (response/content-type file-response (static-content-type filename))
       (text-response 404 "not found"))))
 
 (defn app [request]
-  (if-let [file-response (static-response (:uri request))]
-    file-response
-    (case (:uri request)
-      "/baseline11" (text-response 200 (str (request-sum request)))
-      "/json" (json-items-response request)
-      "/compression" (compression-response)
-      "/db" (db-response request)
-      "/async-db" (async-db-response request)
-      "/upload" (text-response 200 (str (count-stream-bytes (:body request))))
-      "/pipeline" (text-response 200 "ok")
-      (if (re-matches #"/json/[0-9]+" (:uri request))
-        (json-items-response request)
-        (text-response 404 "not found")))))
+  (case (:uri request)
+    "/baseline11" (text-response 200 (str (request-sum request)))
+    "/json" (json-items-response request)
+    "/async-db" (async-db-response request)
+    "/upload" (text-response 200 (str (count-stream-bytes (:body request))))
+    "/pipeline" (text-response 200 "ok")
+    (if (re-matches #"/json/[0-9]+" (:uri request))
+      (json-items-response request)
+      (text-response 404 "not found"))))
 
 (def handler
-  (-> app
-      params/wrap-params
-      gzip/wrap-gzip))
+  (let [compressed-handler (-> app
+                               params/wrap-params
+                               gzip/wrap-gzip)]
+    (fn [request]
+      (if (str/starts-with? (:uri request) "/static/")
+        (or (static-response (:uri request))
+            (text-response 404 "not found"))
+        (compressed-handler request)))))
 
 (defn -main [& _args]
   (init-async-db!)
