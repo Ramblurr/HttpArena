@@ -5,31 +5,24 @@
    [clojure.data.json :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [io.pedestal.http :as http]
+   [io.pedestal.connector :as conn]
+   [io.pedestal.http.jetty :as jetty]
    [io.pedestal.http.route :as route]
-   [ring.util.response :as response]
-   [sqlite4clj.core :as sqlite])
+   [io.pedestal.service.interceptors :as interceptors]
+   [ring.util.response :as response])
   (:import
    [io.vertx.core AsyncResult Handler Vertx]
    [io.vertx.core.json JsonArray]
    [io.vertx.pgclient PgBuilder PgConnectOptions]
    [io.vertx.sqlclient Pool PoolOptions Row Tuple]
    (java.io InputStream)
-   (java.util.zip Deflater)
    (org.eclipse.jetty.ee10.servlet ServletContextHandler)
-   (org.eclipse.jetty.server.handler.gzip GzipHandler)
-   (org.eclipse.jetty.util.compression DeflaterPool)))
+   (org.eclipse.jetty.server.handler.gzip GzipHandler)))
 
 (set! *warn-on-reflection* true)
 
 (def json-content-type "application/json")
 (def static-root "/data/static")
-(def benchmark-db-path "/data/benchmark.db")
-(def db-query
-  "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
-   FROM items
-   WHERE price BETWEEN ? AND ?
-   LIMIT 50")
 (def async-db-query
   "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
    FROM items
@@ -79,28 +72,8 @@
   (when (.exists (io/file path))
     (json/read-str (slurp path) :key-fn keyword)))
 
-(declare compute-json-items)
-
-(defn build-json-body [items]
-  (json/write-str {:items (compute-json-items items 1.0)
-                   :count (count items)}))
-
 (defonce dataset
   (delay (load-dataset "/data/dataset.json")))
-
-(defonce compression-body
-  (delay
-    (some-> (load-dataset "/data/dataset-large.json")
-            build-json-body)))
-
-(defonce db
-  (delay
-    (when (.exists (io/file benchmark-db-path))
-      (let [database (sqlite/init-db! benchmark-db-path
-                                      {:pool-size (max 1 (.availableProcessors (Runtime/getRuntime)))
-                                       :default-result-set-fn sqlite/qualified-keyword-result-set-fn})]
-        (sqlite/q (:reader database) ["SELECT 1"])
-        database))))
 
 (defonce async-db (atom nil))
 
@@ -153,26 +126,8 @@
                           :count (count items)}))
     (text-response 500 "dataset.json not available")))
 
-(defn compression-handler [_request]
-  (if-let [body @compression-body]
-    {:status 200
-     :headers {"Content-Type" json-content-type}
-     :body body}
-    (text-response 500 "dataset-large.json not available")))
-
 (defn upload-handler [request]
   (text-response 200 (str (count-stream-bytes (:body request)))))
-
-(defn sqlite-row->item [row]
-  {:id (:items/id row)
-   :name (:items/name row)
-   :category (:items/category row)
-   :price (:items/price row)
-   :quantity (:items/quantity row)
-   :active (not (zero? (long (:items/active row))))
-   :tags (json/read-str ^String (:items/tags row))
-   :rating {:score (:items/rating_score row)
-            :count (:items/rating_count row)}})
 
 (defn vertx-row->item [^Row row]
   {:id       (.getInteger row "id")
@@ -200,20 +155,6 @@
                   (reset! async-db database))
                 (catch Throwable _
                   nil)))))))
-
-(defn db-handler [request]
-  (let [query-params (:query-params request)
-        min-price (parse-double-safe (get query-params :min) 10.0)
-        max-price (parse-double-safe (get query-params :max) 50.0)
-        items (if-let [database @db]
-                (try
-                  (mapv sqlite-row->item
-                        (or (sqlite/q (:reader database) [db-query min-price max-price]) []))
-                  (catch Throwable _
-                    []))
-                [])]
-    (json-response 200 {:items items
-                        :count (count items)})))
 
 (defn async-db-handler [request]
   (let [query-params (:query-params request)
@@ -269,37 +210,29 @@
   (or (static-response (get-in request [:path-params :filename]))
       (text-response 404 "not found")))
 
-(def common-interceptors
-  [route/query-params])
-
 (def routes
-  #{["/baseline11" :get (conj common-interceptors `baseline-handler) :route-name ::baseline-get]
-    ["/baseline11" :post (conj common-interceptors `baseline-handler) :route-name ::baseline-post]
-    ["/json/:count" :get (conj common-interceptors `json-handler) :route-name ::json]
-    ["/compression" :get (conj common-interceptors `compression-handler) :route-name ::compression]
-    ["/db" :get (conj common-interceptors `db-handler) :route-name ::db]
-    ["/async-db" :get (conj common-interceptors `async-db-handler) :route-name ::async-db]
-    ["/upload" :post (conj common-interceptors `upload-handler) :route-name ::upload]
-    ["/static/:filename" :get `static-handler :route-name ::static]
-    ["/pipeline" :get (conj common-interceptors `pipeline-handler) :route-name ::pipeline]})
+  #{["/baseline11" :get baseline-handler :route-name ::baseline-get]
+    ["/baseline11" :post baseline-handler :route-name ::baseline-post]
+    ["/json/:count" :get json-handler :route-name ::json]
+    ["/async-db" :get async-db-handler :route-name ::async-db]
+    ["/upload" :post upload-handler :route-name ::upload]
+    ["/static/:filename" :get static-handler :route-name ::static]
+    ["/pipeline" :get pipeline-handler :route-name ::pipeline]})
 
-(def service
-  {::http/routes routes
-   ::http/type :jetty
-   ::http/host "0.0.0.0"
-   ::http/port 8080
-   ::http/container-options
-   {:context-configurator
-    (fn [^ServletContextHandler context]
-      (let [gzip-handler (doto (GzipHandler.)
-                           (.setMinGzipSize 1)
-                           (.setDeflaterPool (DeflaterPool. -1 Deflater/BEST_SPEED true)))]
-        (.insertHandler context gzip-handler)
-        context))}
-   ::http/join? true})
+(defn create-connector []
+  (-> (conn/default-connector-map "0.0.0.0" 8080)
+      (assoc :join? true)
+      (conn/with-interceptor interceptors/not-found)
+      (conn/with-interceptor route/query-params)
+      (conn/with-routes routes)
+      (jetty/create-connector
+       {:container-options {:h2c? false
+                            :context-configurator (fn [^ServletContextHandler context]
+                                                    (let [gzip-handler (doto (GzipHandler.)
+                                                                         (.addExcludedPaths
+                                                                          (into-array String ["/static/*"])))]
+                                                      (.insertHandler context gzip-handler)
+                                                      context))}})))
 
 (defn -main [& _args]
-  (init-async-db!)
-  (-> service
-      http/create-server
-      http/start))
+  (conn/start! (create-connector)))
