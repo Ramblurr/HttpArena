@@ -78,7 +78,7 @@
 (defn json-endpoint-response [request item-count]
   (if-let [source @dataset]
     (let [items (take (min 50 (parse-long-safe item-count)) source)
-          multiplier (parse-long-safe (get (:params request) "m"))]
+          multiplier (parse-long-safe (get (:params request) "m" 1))]
       (json-response 200 {:items (compute-json-items items multiplier)
                           :count (count items)}))
     (text-response 500 "dataset.json not available")))
@@ -213,6 +213,9 @@
   (params/wrap-params app))
 
 (defn -main [& _args]
+  (when-not (vector? @dataset)
+    (throw (ex-info "dataset.json must contain a JSON array"
+                    {:path "/data/dataset.json"})))
   (init-async-db!)
   (jetty/run-jetty handler
                    {:host         "0.0.0.0"
