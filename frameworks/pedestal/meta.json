@@ -1,0 +1,19 @@
+{
+  "display_name": "pedestal",
+  "language": "Clojure",
+  "type": "production",
+  "engine": "Jetty",
+  "description": "Pedestal service-map benchmark entry using the standard Jetty-backed server.",
+  "repo": "https://github.com/pedestal/pedestal",
+  "enabled": true,
+  "tests": [
+    "baseline",
+    "pipelined",
+    "limited-conn",
+    "json",
+    "json-comp",
+    "upload",
+    "static",
+    "async-db"
+  ]
+}
