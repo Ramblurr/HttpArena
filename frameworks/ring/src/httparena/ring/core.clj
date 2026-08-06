@@ -34,7 +34,7 @@
   "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
    FROM items
    WHERE price BETWEEN ? AND ?
-   LIMIT 50")
+   LIMIT ?")
 (def static-content-types
   {"css" "text/css"
    "js" "application/javascript"
@@ -69,9 +69,6 @@
     :else
     (recur (str value) default)))
 
-(defn round2 [value]
-  (/ (Math/round (* (double value) 100.0)) 100.0))
-
 (defn load-dataset [path]
   (when (.exists (io/file path))
     (json/read-str (slurp path) :key-fn keyword)))
@@ -79,7 +76,7 @@
 (declare compute-json-items)
 
 (defn build-json-body [items]
-  (json/write-str {:items (compute-json-items items)
+  (json/write-str {:items (compute-json-items items 1)
                    :count (count items)}))
 
 (defonce dataset
@@ -101,9 +98,9 @@
 
 (defonce async-db (atom nil))
 
-(defn compute-json-items [items]
+(defn compute-json-items [items multiplier]
   (mapv (fn [{:keys [price quantity] :as item}]
-          (assoc item :total (round2 (* price quantity))))
+          (assoc item :total (* price quantity multiplier)))
         items))
 
 (defn request-sum [request]
@@ -133,6 +130,14 @@
   {:status status
    :headers {"content-type" json-content-type}
    :body (json/write-str body)})
+
+(defn json-endpoint-response [request item-count]
+  (if-let [source @dataset]
+    (let [items (take (min 50 (parse-long-safe item-count)) source)
+          multiplier (parse-long-safe (get (:params request) "m"))]
+      (json-response 200 {:items (compute-json-items items multiplier)
+                          :count (count items)}))
+    (text-response 500 "dataset.json not available")))
 
 (defn compression-response []
   (if-let [body @compression-body]
@@ -189,9 +194,7 @@
            (str "?" (str/join "&" query-parts))))))
 
 (defn async-db-pool-size []
-  (let [cpu-target (* 4 (.availableProcessors (Runtime/getRuntime)))
-        max-conn (parse-long-safe (or (System/getenv "DATABASE_MAX_CONN") "256"))]
-    (max 1 (int (min max-conn cpu-target)))))
+  (int (max 1 (parse-long-safe (or (System/getenv "DATABASE_MAX_CONN") "256")))))
 
 (defn init-async-db! []
   (when-let [database-url (System/getenv "DATABASE_URL")]
@@ -229,12 +232,16 @@
   (let [params (:params request)
         min-price (parse-double-safe (get params "min") 10.0)
         max-price (parse-double-safe (get params "max") 50.0)
+        limit (-> (or (get params "limit") "50")
+                  parse-long-safe
+                  (max 1)
+                  (min 50))
         database (init-async-db!)
         items (if database
                 (try
                   (mapv postgres-row->item
                         (jdbc/execute! database
-                                       [async-db-query min-price max-price]
+                                       [async-db-query min-price max-price limit]
                                        {:builder-fn rs/as-unqualified-lower-maps}))
                   (catch Throwable _
                     []))
@@ -267,32 +274,30 @@
 (defn app [request]
   (if-let [file-response (static-response (:uri request))]
     file-response
-    (case (:uri request)
-      "/baseline11" (case (:request-method request)
-                      (:get :post) (text-response 200 (str (request-sum request)))
-                      (method-not-allowed-response))
-      "/json" (if (= :get (:request-method request))
-                (if-let [source @dataset]
-                  (json-response 200 {:items (compute-json-items source)
-                                      :count (count source)})
-                  (text-response 500 "dataset.json not available"))
+    (if-let [[_ item-count] (re-matches #"/json/(\d+)" (:uri request))]
+      (if (= :get (:request-method request))
+        (json-endpoint-response request item-count)
+        (method-not-allowed-response))
+      (case (:uri request)
+        "/baseline11" (case (:request-method request)
+                        (:get :post) (text-response 200 (str (request-sum request)))
+                        (method-not-allowed-response))
+        "/compression" (if (= :get (:request-method request))
+                         (compression-response)
+                         (method-not-allowed-response))
+        "/db" (if (= :get (:request-method request))
+                (db-response request)
                 (method-not-allowed-response))
-      "/compression" (if (= :get (:request-method request))
-                       (compression-response)
-                       (method-not-allowed-response))
-      "/db" (if (= :get (:request-method request))
-              (db-response request)
-              (method-not-allowed-response))
-      "/async-db" (if (= :get (:request-method request))
-                    (async-db-response request)
+        "/async-db" (if (= :get (:request-method request))
+                      (async-db-response request)
+                      (method-not-allowed-response))
+        "/upload" (if (= :post (:request-method request))
+                    (text-response 200 (str (count-stream-bytes (:body request))))
                     (method-not-allowed-response))
-      "/upload" (if (= :post (:request-method request))
-                  (text-response 200 (str (count-stream-bytes (:body request))))
-                  (method-not-allowed-response))
-      "/pipeline" (if (= :get (:request-method request))
-                    (text-response 200 "ok")
-                    (method-not-allowed-response))
-      (text-response 404 "not found"))))
+        "/pipeline" (if (= :get (:request-method request))
+                      (text-response 200 "ok")
+                      (method-not-allowed-response))
+        (text-response 404 "not found")))))
 
 (def handler
   (wrap-params app))
