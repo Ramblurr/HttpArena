@@ -47,8 +47,7 @@
 (defonce dataset
   (delay (load-dataset "/data/dataset.json")))
 
-(defonce vertx
-  (delay (Vertx/vertx)))
+(defonce vertx (atom nil))
 
 (defonce async-db (atom nil))
 
@@ -102,7 +101,8 @@
                     ^PoolOptions pool-options (doto (PoolOptions.)
                                                 (.setMaxSize (async-db-pool-size)))
                     ^ClientBuilder builder (PgBuilder/pool)
-                    ^Vertx vertx-instance @vertx
+                    ^Vertx vertx-instance (or @vertx
+                                              (reset! vertx (Vertx/vertx)))
                     ^Pool database (-> builder
                                        (.with pool-options)
                                        (.connectingTo connect-options)
@@ -123,25 +123,30 @@
       (respond (json-response 200 {:items [] :count 0})))))
 
 (defn async-db-response [request respond raise]
-  (let [params         (:params request)
-        min-price      (parse-long-safe (get params "min" "10"))
-        max-price      (parse-long-safe (get params "max" "50"))
-        limit          (-> (get params "limit" "50")
-                           parse-long-safe
-                           (max 1)
-                           (min 50))
-        ^Pool database (init-async-db!)]
-    (if database
-      (let [^PreparedQuery query  (.preparedQuery database async-db-query)
-            ^Tuple query-params   (doto (Tuple/tuple)
-                                    (.addInteger (int min-price))
-                                    (.addInteger (int max-price))
-                                    (.addInteger (int limit)))
-            ^Future query-result  (.execute query query-params)]
-        (.onComplete query-result
-                     (reify Handler
-                       (handle [_ result]
-                         (complete-async-db! result respond raise)))))
+  (let [params    (:params request)
+        min-price (parse-long-safe (get params "min" "10"))
+        max-price (parse-long-safe (get params "max" "50"))
+        limit     (-> (get params "limit" "50")
+                      parse-long-safe
+                      (max 1)
+                      (min 50))]
+    (when-not
+     (try
+       (if-let [^Pool database (init-async-db!)]
+         (let [^PreparedQuery query (.preparedQuery database async-db-query)
+               ^Tuple query-params (doto (Tuple/tuple)
+                                     (.addInteger (int min-price))
+                                     (.addInteger (int max-price))
+                                     (.addInteger (int limit)))
+               ^Future query-result (.execute query query-params)]
+           (.onComplete query-result
+                        (reify Handler
+                          (handle [_ result]
+                            (complete-async-db! result respond raise))))
+           true)
+         false)
+       (catch Throwable _
+         false))
       (respond (json-response 200 {:items [] :count 0})))))
 
 (defn method-not-allowed-response []
