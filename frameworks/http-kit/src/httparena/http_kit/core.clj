@@ -129,20 +129,25 @@
       (http-kit/as-channel
        request
        {:on-open (fn [channel]
-                   (-> (.preparedQuery database async-db-query)
-                       (.execute (Tuple/of min-price max-price limit))
-                       (.onComplete
-                        (reify Handler
-                          (handle [_ result]
-                            (let [^AsyncResult async-result result]
-                              (http-kit/send!
-                               channel
-                               (if (.succeeded async-result)
-                                 (let [^RowSet rows (.result async-result)
-                                       items        (mapv vertx-row->item rows)]
-                                   (json-response 200 {:items items
-                                                       :count (count items)}))
-                                 (json-response 200 {:items [] :count 0})))))))))})
+                   (try
+                     (-> (.preparedQuery database async-db-query)
+                         (.execute (Tuple/of min-price max-price limit))
+                         (.onComplete
+                          (reify Handler
+                            (handle [_ result]
+                              (let [^AsyncResult async-result result]
+                                (http-kit/send!
+                                 channel
+                                 (if (.succeeded async-result)
+                                   (let [^RowSet rows (.result async-result)
+                                         items        (mapv vertx-row->item rows)]
+                                     (json-response 200 {:items items
+                                                         :count (count items)}))
+                                   (json-response 200 {:items [] :count 0}))))))))
+                     (catch Throwable _
+                       (http-kit/send!
+                        channel
+                        (json-response 200 {:items [] :count 0})))))})
       (json-response 200 {:items [] :count 0}))))
 
 (defn static-filename [uri]
