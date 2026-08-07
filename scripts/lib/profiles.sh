@@ -21,6 +21,7 @@ declare -A PROFILES=(
     [api-16]="1|5|0-7,64-71|1024|api-16"
     [static]="1|200|0-31,64-95|1024,4096,6800|static"
     [async-db]="1|0|0-31,64-95|1024|async-db"
+    [database-concurrency]="1|0|0-31,64-95|1024|database-concurrency"
     [crud]="1|200|1-31,65-95|4096|crud"
     [fortunes]="1|0|0-31,64-95|1024|fortunes"
     [baseline-h2]="1|0|0-31,64-95|256,1024|h2"
@@ -45,7 +46,7 @@ PROFILE_ORDER=(
     baseline pipelined limited-conn
     json json-comp json-tls
     upload api-4 api-16
-    static async-db crud
+    static async-db database-concurrency crud
     fortunes
     baseline-h2 static-h2
     baseline-h2c json-h2c
@@ -83,7 +84,7 @@ endpoint_tool() {
         h3|static-h3|gateway-h3)            echo "h2load-h3" ;;
         # ghz for real gRPC (streaming especially)
         grpc-stream|grpc-stream-tls)        echo "ghz" ;;
-        # gcannon for everything else (h1, upload, api-4, api-16, async-db, ws, ...)
+        # gcannon for everything else (h1, upload, api-4, api-16, database profiles, ws, ...)
         *)                                  echo "gcannon" ;;
     esac
 }

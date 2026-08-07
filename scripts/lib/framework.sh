@@ -94,7 +94,7 @@ framework_start() {
 
     # Profiles that exercise the database get DATABASE_URL + per-profile conn cap.
     case "$endpoint" in
-        async-db|crud|api-4|api-16|fortunes)
+        async-db|database-concurrency|crud|api-4|api-16|fortunes)
             args+=(-e "DATABASE_URL=$DATABASE_URL" -e "DATABASE_MAX_CONN=256")
             ;;
     esac

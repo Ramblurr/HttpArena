@@ -46,6 +46,11 @@ gcannon_build_args() {
                   --raw "$REQUESTS_DIR/async-db-5.raw,$REQUESTS_DIR/async-db-10.raw,$REQUESTS_DIR/async-db-20.raw,$REQUESTS_DIR/async-db-35.raw,$REQUESTS_DIR/async-db-50.raw"
                   -c "$conns" -t "$THREADS" -d 10s -p "$pipeline" -r 25)
             ;;
+        database-concurrency)
+            args=("http://localhost:$PORT"
+                  --raw "$REQUESTS_DIR/database-concurrency-5.raw,$REQUESTS_DIR/database-concurrency-10.raw,$REQUESTS_DIR/database-concurrency-20.raw,$REQUESTS_DIR/database-concurrency-35.raw,$REQUESTS_DIR/database-concurrency-50.raw"
+                  -c "$conns" -t "$THREADS" -d 10s -p "$pipeline" -r 25)
+            ;;
         fortunes)
             # Single endpoint, fixed 12-row seed + 1 runtime-injected row.
             # No --raw rotation: every request is the same GET; the per-request
