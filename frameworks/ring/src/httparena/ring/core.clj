@@ -4,27 +4,30 @@
    [clojure.data.json :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [hikari-cp.core :as hikari]
+   [next.jdbc :as jdbc]
+   [next.jdbc.result-set :as rs]
    [ring.adapter.jetty :as jetty]
    [ring.middleware.params :as params]
    [ring.util.response :as response])
   (:import
-   [io.vertx.core AsyncResult Handler Vertx]
-   [io.vertx.pgclient PgBuilder PgConnectOptions]
-   [io.vertx.sqlclient Pool PoolOptions Row RowSet Tuple]
-   (java.io InputStream OutputStream)
-   (org.eclipse.jetty.server Server)
-   (org.eclipse.jetty.server.handler.gzip GzipHandler)))
+   [java.io InputStream OutputStream]
+   [java.net URI]
+   [org.eclipse.jetty.server Server]
+   [org.eclipse.jetty.server.handler.gzip GzipHandler]
+   [org.eclipse.jetty.util VirtualThreads]
+   [org.eclipse.jetty.util.thread QueuedThreadPool]
+   [org.postgresql.util PGobject]))
 
 (set! *warn-on-reflection* true)
 
 (def json-content-type "application/json")
 (def static-root "/data/static")
-
-(def async-db-query
+(def database-concurrency-query
   "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
    FROM items
-   WHERE price BETWEEN $1 AND $2
-   LIMIT $3")
+   WHERE price BETWEEN ? AND ?
+   LIMIT ?")
 (def static-content-types
   {"css" "text/css"
    "js" "application/javascript"
@@ -38,6 +41,39 @@
   (or (some-> value str str/trim not-empty parse-long)
       0))
 
+(defn parse-int [value default]
+  (try
+    (if (some? value)
+      (Integer/parseInt (str value))
+      default)
+    (catch NumberFormatException _
+      default)))
+
+(defn database-max-conn []
+  (max 1 (parse-int (System/getenv "DATABASE_MAX_CONN") 256)))
+
+(defn database-url->hikari-options [database-url]
+  (let [uri                 (URI. database-url)
+        scheme              (.getScheme uri)
+        host                (.getHost uri)
+        port                (.getPort uri)
+        path                (.getRawPath uri)
+        query-string        (.getRawQuery uri)
+        [username password] (str/split (or (.getUserInfo uri) "") #":" 2)]
+    (when-not (and (#{"postgres" "postgresql"} scheme)
+                   (seq host)
+                   (seq path)
+                   (seq username)
+                   (some? password))
+      (throw (ex-info "invalid DATABASE_URL" {:scheme scheme})))
+    {:jdbc-url          (str "jdbc:postgresql://" host
+                            (when-not (= -1 port) (str ":" port))
+                            path
+                            (when query-string (str "?" query-string)))
+     :username          username
+     :password          password
+     :maximum-pool-size (database-max-conn)}))
+
 (defn load-dataset [path]
   (when (.exists (io/file path))
     (json/read-str (slurp path) :key-fn keyword)))
@@ -45,7 +81,7 @@
 (defonce dataset
   (delay (load-dataset "/data/dataset.json")))
 
-(defonce async-db (atom nil))
+(defonce datasource (atom nil))
 
 (defn compute-json-items [items multiplier]
   (mapv (fn [{:keys [price quantity] :as item}]
@@ -54,11 +90,11 @@
 
 (defn request-sum [request]
   (let [params (:params request)
-        a (parse-long-safe (get params "a"))
-        b (parse-long-safe (get params "b"))
-        body (if (= :post (:request-method request))
-               (parse-long-safe (slurp (:body request)))
-               0)]
+        a      (parse-long-safe (get params "a"))
+        b      (parse-long-safe (get params "b"))
+        body   (if (= :post (:request-method request))
+                 (parse-long-safe (slurp (:body request)))
+                 0)]
     (+ a b body)))
 
 (defn count-stream-bytes [^InputStream in]
@@ -72,84 +108,68 @@
 
 (defn json-response [status body]
   {:status status
-   :headers {"content-type" json-content-type}
+   :headers {"Content-Type" json-content-type}
    :body (json/write-str body)})
 
-(defn json-endpoint-response [request item-count]
-  (if-let [source @dataset]
-    (let [items (take (min 50 (parse-long-safe item-count)) source)
-          multiplier (parse-long-safe (get (:params request) "m" 1))]
-      (json-response 200 {:items (compute-json-items items multiplier)
-                          :count (count items)}))
-    (text-response 500 "dataset.json not available")))
+(defn empty-response []
+  (json-response 200 {:items []
+                      :count 0}))
 
-(defn vertx-row->item [^Row row]
-  {:id       (.getInteger row "id")
-   :name     (.getString row "name")
-   :category (.getString row "category")
-   :price    (.getInteger row "price")
-   :quantity (.getInteger row "quantity")
-   :active   (.getBoolean row "active")
-   :tags     (vec (.getList (.getJsonArray row "tags")))
-   :rating   {:score (.getInteger row "rating_score")
-              :count (.getInteger row "rating_count")}})
+(defn tags->vector [tags]
+  (cond
+    (instance? PGobject tags) (json/read-str (.getValue ^PGobject tags))
+    (string? tags) (json/read-str tags)
+    (sequential? tags) (vec tags)
+    :else (throw (ex-info "unexpected tags value" {:type (type tags)}))))
 
-(defn async-db-pool-size []
-  (max 1 (int (parse-long-safe (or (System/getenv "DATABASE_MAX_CONN") "256")))))
+(defn rows->items [rows]
+  (mapv (fn [{:keys [id name category price quantity active tags rating_score rating_count]}]
+          {:id       id
+           :name     name
+           :category category
+           :price    price
+           :quantity quantity
+           :active   active
+           :tags     (tags->vector tags)
+           :rating   {:score rating_score
+                      :count rating_count}})
+        rows))
 
-(defn init-async-db! []
-  (when-let [database-url (System/getenv "DATABASE_URL")]
-    (or @async-db
-        (locking async-db
-          (or @async-db
-              (try
-                (let [^Pool database (-> (PgBuilder/pool)
-                                         (.with (doto (PoolOptions.)
-                                                  (.setMaxSize (async-db-pool-size))))
-                                         (.connectingTo (PgConnectOptions/fromUri database-url))
-                                         (.using (Vertx/vertx))
-                                         (.build))]
-                  (reset! async-db database))
-                (catch Throwable _
-                  nil)))))))
+(defn datasource! []
+  (or @datasource
+      (locking datasource
+        (or @datasource
+            (try
+              (let [database (hikari/make-datasource
+                              (database-url->hikari-options
+                               (System/getenv "DATABASE_URL")))]
+                (reset! datasource database))
+              (catch Exception _
+                nil))))))
 
-(defn empty-db-response []
-  (json-response 200 {:items [] :count 0}))
+(defn close-datasource! []
+  (when-let [database @datasource]
+    (hikari/close-datasource database)
+    (reset! datasource nil)))
 
-(defn respond-with-db-rows! [rows respond raise]
-  (try
-    (let [items (mapv vertx-row->item rows)]
-      (respond (json-response 200 {:items items
-                                   :count (count items)})))
-    (catch Exception exception
-      (raise exception))))
-
-(defn complete-async-db! [^AsyncResult result respond raise]
-  (if (.succeeded result)
-    (let [^RowSet rows (.result result)]
-      (respond-with-db-rows! rows respond raise))
-    (respond (empty-db-response))))
-
-(defn async-db-response [request respond raise]
-  (let [params         (:params request)
-        min-price      (int (parse-long-safe (get params "min" "10")))
-        max-price      (int (parse-long-safe (get params "max" "50")))
-        limit          (int (min 50 (max 1 (parse-long-safe (get params "limit" "50")))))
-        ^Pool database (init-async-db!)]
-    (if database
+(defn database-concurrency-handler [request]
+  (let [params    (:params request)
+        min-price (parse-int (get params "min") 10)
+        max-price (parse-int (get params "max") 50)
+        limit     (-> (parse-int (get params "limit") 50)
+                      (max 1)
+                      (min 50))]
+    (if-let [database (datasource!)]
       (try
-        (-> (.preparedQuery database async-db-query)
-            (.execute (Tuple/of min-price max-price limit))
-            (.onComplete
-             (reify Handler
-               (handle [_ result]
-                 (complete-async-db! result respond raise)))))
+        (let [rows  (jdbc/execute! database
+                                   [database-concurrency-query min-price max-price limit]
+                                   {:builder-fn rs/as-unqualified-lower-maps})
+              items (rows->items rows)]
+          (json-response 200 {:items items
+                              :count (count items)}))
         (catch Exception _
-          (respond (empty-db-response))))
-      (respond (empty-db-response)))))
-
-(defn method-not-allowed-response []
-  (text-response 405 "method not allowed"))
+          (empty-response)))
+      (empty-response))))
 
 (defn static-filename [uri]
   (when (str/starts-with? uri "/static/")
@@ -170,53 +190,59 @@
       (response/content-type file-response (static-content-type filename))
       (text-response 404 "not found"))))
 
-(defn app
-  ([request]
-   (let [uri    (:uri request)
-         method (:request-method request)]
-     (cond
-       (str/starts-with? uri "/static/")
-       (if (= :get method)
-         (or (static-response uri)
-             (text-response 404 "not found"))
-         (method-not-allowed-response))
+(defn json-endpoint-response [request item-count]
+  (if-let [source @dataset]
+    (let [items      (take (min 50 (parse-long-safe item-count)) source)
+          multiplier (parse-long-safe (get (:params request) "m" 1))]
+      (json-response 200 {:items (compute-json-items items multiplier)
+                          :count (count items)}))
+    (text-response 500 "dataset.json not available")))
 
-       :else
-       (if-let [[_ item-count] (re-matches #"/json/(\d+)" uri)]
-         (if (= :get method)
-           (json-endpoint-response request item-count)
-           (method-not-allowed-response))
-         (case uri
-           "/baseline11" (case method
-                           (:get :post) (text-response 200 (str (request-sum request)))
-                           (method-not-allowed-response))
-           "/async-db" (if (= :get method)
-                         (empty-db-response)
-                         (method-not-allowed-response))
-           "/upload" (if (= :post method)
-                       (text-response 200 (str (count-stream-bytes (:body request))))
-                       (method-not-allowed-response))
-           "/pipeline" (if (= :get method)
-                         (text-response 200 "ok")
-                         (method-not-allowed-response))
-           (text-response 404 "not found"))))))
-  ([request respond raise]
-   (try
-     (if (and (= :get (:request-method request))
-              (= "/async-db" (:uri request)))
-       (async-db-response request respond raise)
-       (respond (app request)))
-     (catch Exception exception
-       (raise exception)))))
+(defn method-not-allowed-response []
+  (text-response 405 "method not allowed"))
+
+(defn app [request]
+  (let [uri    (:uri request)
+        method (:request-method request)]
+    (cond
+      (str/starts-with? uri "/static/")
+      (if (= :get method)
+        (or (static-response uri)
+            (text-response 404 "not found"))
+        (method-not-allowed-response))
+
+      :else
+      (if-let [[_ item-count] (re-matches #"/json/(\d+)" uri)]
+        (if (= :get method)
+          (json-endpoint-response request item-count)
+          (method-not-allowed-response))
+        (case uri
+          "/baseline11" (case method
+                          (:get :post) (text-response 200 (str (request-sum request)))
+                          (method-not-allowed-response))
+          "/database-concurrency" (if (= :get method)
+                                    (database-concurrency-handler request)
+                                    (method-not-allowed-response))
+          "/upload" (if (= :post method)
+                      (text-response 200 (str (count-stream-bytes (:body request))))
+                      (method-not-allowed-response))
+          "/pipeline" (if (= :get method)
+                        (text-response 200 "ok")
+                        (method-not-allowed-response))
+          (text-response 404 "not found"))))))
 
 (def handler
   (params/wrap-params app))
+
+(defn virtual-thread-pool []
+  (doto (QueuedThreadPool.)
+    (.setVirtualThreadsExecutor (VirtualThreads/getDefaultVirtualThreadsExecutor))))
 
 (defn -main [& _args]
   (when-not (vector? @dataset)
     (throw (ex-info "dataset.json must contain a JSON array"
                     {:path "/data/dataset.json"})))
-  (init-async-db!)
+  (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable close-datasource!))
   (jetty/run-jetty handler
                    {:host         "0.0.0.0"
                     :configurator (fn [^Server server]
@@ -225,6 +251,6 @@
                                                           (into-array String ["/static/*"]))
                                                          (.setHandler (.getHandler server)))]
                                       (.setHandler server gzip-handler)))
-                    :port         8080
                     :join?        true
-                    :async?       true}))
+                    :port         8080
+                    :thread-pool  (virtual-thread-pool)}))
