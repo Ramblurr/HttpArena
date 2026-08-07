@@ -2,9 +2,9 @@
   "display_name": "http-kit",
   "language": "Clojure",
   "type": "emerging",
-  "mode": "standard",
+  "mode": "tuned",
   "engine": "http-kit",
-  "description": "Ring-compatible benchmark entry using the native http-kit server.",
+  "description": "Ring-compatible benchmark entry using blocking JDBC on http-kit's virtual request workers.",
   "repo": "https://github.com/http-kit/http-kit",
   "enabled": true,
   "tests": [
@@ -15,7 +15,7 @@
     "json-comp",
     "upload",
     "static",
-    "async-db"
+    "database-concurrency"
   ],
   "maintainers": []
 }
