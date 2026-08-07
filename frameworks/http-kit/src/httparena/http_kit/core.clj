@@ -4,14 +4,15 @@
    [clojure.data.json :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [hikari-cp.core :as hikari]
+   [next.jdbc :as jdbc]
+   [next.jdbc.result-set :as rs]
    [org.httpkit.server :as http-kit]
    [ring.middleware.gzip :as gzip]
    [ring.middleware.params :as params]
    [ring.util.response :as response])
   (:import
-   [io.vertx.core AsyncResult Handler Vertx]
-   [io.vertx.pgclient PgBuilder PgConnectOptions]
-   [io.vertx.sqlclient Pool PoolOptions Row RowSet Tuple]
+   [org.postgresql.util PGobject]
    (java.io InputStream OutputStream)))
 
 (set! *warn-on-reflection* true)
@@ -20,11 +21,11 @@
 (def max-request-body-bytes (* 32 1024 1024))
 (def static-root "/data/static")
 
-(def async-db-query
+(def database-concurrency-query
   "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count
    FROM items
-   WHERE price BETWEEN $1 AND $2
-   LIMIT $3")
+   WHERE price BETWEEN ? AND ?
+   LIMIT ?")
 (def static-content-types
   {"css" "text/css"
    "js" "application/javascript"
@@ -48,7 +49,7 @@
 (defonce dataset
   (delay (load-dataset "/data/dataset.json")))
 
-(defonce async-db (atom nil))
+(defonce database-concurrency (atom nil))
 
 (defn compute-json-items [items multiplier]
   (mapv (fn [{:keys [price quantity] :as item}]
@@ -89,66 +90,87 @@
                           :count (count items)}))
     (text-response 500 "dataset.json not available")))
 
-(defn vertx-row->item [^Row row]
-  {:id       (.getInteger row "id")
-   :name     (.getString row "name")
-   :category (.getString row "category")
-   :price    (.getInteger row "price")
-   :quantity (.getInteger row "quantity")
-   :active   (.getBoolean row "active")
-   :tags     (vec (.getList (.getJsonArray row "tags")))
-   :rating   {:score (.getInteger row "rating_score")
-              :count (.getInteger row "rating_count")}})
+(defn tags->vector [tags]
+  (cond
+    (instance? PGobject tags) (json/read-str (.getValue ^PGobject tags))
+    (string? tags) (json/read-str tags)
+    (sequential? tags) (vec tags)
+    :else (throw (ex-info "unexpected tags value" {:type (type tags)}))))
 
-(defn async-db-pool-size []
-  (max 1 (int (parse-long-safe (or (System/getenv "DATABASE_MAX_CONN") "256")))))
+(defn jdbc-row->item [{:keys [id name category price quantity active tags rating_score rating_count]}]
+  {:id       id
+   :name     name
+   :category category
+   :price    price
+   :quantity quantity
+   :active   active
+   :tags     (tags->vector tags)
+   :rating   {:score rating_score
+              :count rating_count}})
 
-(defn init-async-db! []
-  (when-let [database-url (System/getenv "DATABASE_URL")]
-    (or @async-db
-        (locking async-db
-          (or @async-db
-              (try
-                (let [database (-> (PgBuilder/pool)
-                                   (.with (doto (PoolOptions.)
-                                            (.setMaxSize (async-db-pool-size))))
-                                   (.connectingTo (PgConnectOptions/fromUri database-url))
-                                   (.using (Vertx/vertx))
-                                   (.build))]
-                  (reset! async-db database))
-                (catch Throwable _
-                  nil)))))))
+(defn database-max-conn []
+  (try
+    (max 1 (Integer/parseInt (or (System/getenv "DATABASE_MAX_CONN") "256")))
+    (catch NumberFormatException _
+      256)))
 
-(defn async-db-response [request]
-  (let [params         (:params request)
-        min-price      (parse-long-safe (get params "min" "10"))
-        max-price      (parse-long-safe (get params "max" "50"))
-        limit          (min 50 (max 1 (parse-long-safe (get params "limit" "50"))))
-        ^Pool database (init-async-db!)]
-    (if database
-      (http-kit/as-channel
-       request
-       {:on-open (fn [channel]
-                   (try
-                     (-> (.preparedQuery database async-db-query)
-                         (.execute (Tuple/of min-price max-price limit))
-                         (.onComplete
-                          (reify Handler
-                            (handle [_ result]
-                              (let [^AsyncResult async-result result]
-                                (http-kit/send!
-                                 channel
-                                 (if (.succeeded async-result)
-                                   (let [^RowSet rows (.result async-result)
-                                         items        (mapv vertx-row->item rows)]
-                                     (json-response 200 {:items items
-                                                         :count (count items)}))
-                                   (json-response 200 {:items [] :count 0}))))))))
-                     (catch Throwable _
-                       (http-kit/send!
-                        channel
-                        (json-response 200 {:items [] :count 0})))))})
-      (json-response 200 {:items [] :count 0}))))
+(defn database-url->hikari-options [database-url]
+  (let [uri                 (java.net.URI. database-url)
+        scheme              (.getScheme uri)
+        host                (.getHost uri)
+        port                (.getPort uri)
+        path                (.getRawPath uri)
+        query-string        (.getRawQuery uri)
+        [username password] (str/split (or (.getUserInfo uri) "") #":" 2)]
+    (when-not (and (#{"postgres" "postgresql"} scheme)
+                   (seq host)
+                   (seq path)
+                   (seq username)
+                   (some? password))
+      (throw (ex-info "invalid DATABASE_URL" {:scheme scheme})))
+    {:jdbc-url          (str "jdbc:postgresql://" host
+                            (when-not (= -1 port) (str ":" port))
+                            path
+                            (when query-string (str "?" query-string)))
+     :username          username
+     :password          password
+     :maximum-pool-size (database-max-conn)}))
+
+(defn init-database-concurrency! []
+  (or @database-concurrency
+      (locking database-concurrency
+        (or @database-concurrency
+            (try
+              (let [datasource (hikari/make-datasource
+                                (database-url->hikari-options
+                                 (System/getenv "DATABASE_URL")))]
+                (reset! database-concurrency datasource))
+              (catch Exception _
+                nil))))))
+
+(defn close-database-concurrency! []
+  (when-let [datasource @database-concurrency]
+    (hikari/close-datasource datasource)
+    (reset! database-concurrency nil)))
+
+(defn database-concurrency-statement [params]
+  (let [min-price (parse-long-safe (get params "min") 10)
+        max-price (parse-long-safe (get params "max") 50)
+        limit     (min 50 (max 1 (parse-long-safe (get params "limit") 50)))]
+    [database-concurrency-query min-price max-price limit]))
+
+(defn database-concurrency-response [request]
+  (if-let [datasource (init-database-concurrency!)]
+    (try
+      (let [rows  (jdbc/execute! datasource
+                                 (database-concurrency-statement (:params request))
+                                 {:builder-fn rs/as-unqualified-lower-maps})
+            items (mapv jdbc-row->item rows)]
+        (json-response 200 {:items items
+                            :count (count items)}))
+      (catch Exception _
+        (json-response 200 {:items [] :count 0})))
+    (json-response 200 {:items [] :count 0})))
 
 (defn static-filename [uri]
   (when (str/starts-with? uri "/static/")
@@ -172,7 +194,7 @@
 (defn app [request]
   (case (:uri request)
     "/baseline11" (text-response 200 (str (request-sum request)))
-    "/async-db" (async-db-response request)
+    "/database-concurrency" (database-concurrency-response request)
     "/upload" (text-response 200 (str (count-stream-bytes (:body request))))
     "/pipeline" (text-response 200 "ok")
     (if (re-matches #"/json/[0-9]+" (:uri request))
@@ -193,8 +215,11 @@
   (when-not (vector? @dataset)
     (throw (ex-info "dataset.json must contain a JSON array"
                     {:path "/data/dataset.json"})))
-  (init-async-db!)
-  (http-kit/run-server handler {:ip "0.0.0.0"
-                                :max-body max-request-body-bytes
-                                :port 8080})
-  @(promise))
+  (let [stop-server (http-kit/run-server handler {:ip "0.0.0.0"
+                                                  :max-body max-request-body-bytes
+                                                  :port 8080})]
+    (.addShutdownHook (Runtime/getRuntime)
+                      (Thread. ^Runnable (fn []
+                                          (stop-server)
+                                          (close-database-concurrency!))))
+    @(promise)))

@@ -24,6 +24,7 @@ source "$SOURCE_DIR/redis.sh"
 source "$SOURCE_DIR/gateway.sh"
 source "$SOURCE_DIR/framework.sh"
 source "$SOURCE_DIR/profiles.sh"
+source "$SOURCE_DIR/database-concurrency.sh"
 source "$SOURCE_DIR/tools/gcannon.sh"
 source "$SOURCE_DIR/tools/h2load.sh"
 source "$SOURCE_DIR/tools/h2load-h3.sh"
@@ -158,6 +159,9 @@ fi
 
 framework_load_meta "$FRAMEWORK_ARG"
 FRAMEWORK="$FRAMEWORK_ARG"
+if framework_subscribes_to database-concurrency; then
+    validate_database_concurrency_contract "$ROOT_DIR" "$FRAMEWORK"
+fi
 
 # Framework-level image build — skipped for compose-only entries because
 # their compose files build the server image from the repo root context,
@@ -165,7 +169,7 @@ FRAMEWORK="$FRAMEWORK_ARG"
 # and any combination thereof.
 _has_isolated_test=false
 for t in baseline pipelined limited-conn json json-comp json-tls upload \
-         api-4 api-16 static async-db \
+         api-4 api-16 static async-db database-concurrency \
          baseline-h2 static-h2 baseline-h2c json-h2c \
          baseline-h3 static-h3 \
          unary-grpc unary-grpc-tls stream-grpc stream-grpc-tls \
@@ -184,7 +188,7 @@ fi
 
 # Start the postgres sidecar if any subscribed test needs it.
 need_pg=false
-for t in async-db crud api-4 api-16 gateway-64 gateway-h3 production-stack fortunes; do
+for t in async-db database-concurrency crud api-4 api-16 gateway-64 gateway-h3 production-stack fortunes; do
     if framework_subscribes_to "$t"; then need_pg=true; break; fi
 done
 if $need_pg; then postgres_start; fi
@@ -230,7 +234,7 @@ run_one() {
     # contention, collapsing crud from ~680k to ~210k rps. The first DB profile
     # already has a fresh server from the upfront postgres_start, so skip it.
     case "$endpoint" in
-        async-db|crud|api-4|api-16|fortunes)
+        async-db|database-concurrency|crud|api-4|api-16|fortunes)
             if [ "${PG_DIRTY:-false}" = true ]; then
                 info "resetting postgres for a clean per-profile baseline"
                 postgres_start

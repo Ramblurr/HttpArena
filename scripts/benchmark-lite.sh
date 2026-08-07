@@ -55,6 +55,7 @@ source "$SOURCE_DIR/stats.sh"
 source "$SOURCE_DIR/postgres.sh"
 source "$SOURCE_DIR/framework.sh"
 source "$SOURCE_DIR/profiles.sh"
+source "$SOURCE_DIR/database-concurrency.sh"
 source "$SOURCE_DIR/tools/gcannon.sh"
 source "$SOURCE_DIR/tools/h2load.sh"
 source "$SOURCE_DIR/tools/h2load-h3.sh"
@@ -81,6 +82,7 @@ declare -A PROFILES=(
     [upload]="1|0||128|upload"
     [static]="1|10||512|static"
     [async-db]="1|0||512|async-db"
+    [database-concurrency]="1|0||1024|database-concurrency"
     [baseline-h2]="1|0||512|h2"
     [static-h2]="1|0||512|static-h2"
     [baseline-h3]="1|0||64|h3"
@@ -92,7 +94,7 @@ declare -A PROFILES=(
 PROFILE_ORDER=(
     baseline pipelined limited-conn
     json json-comp
-    upload static async-db
+    upload static async-db database-concurrency
     baseline-h2 static-h2
     baseline-h3 static-h3
     unary-grpc unary-grpc-tls
@@ -195,6 +197,9 @@ run_framework() {
     local fw="$1"
     framework_load_meta "$fw"
     FRAMEWORK="$fw"
+    if framework_subscribes_to database-concurrency; then
+        validate_database_concurrency_contract "$ROOT_DIR" "$FRAMEWORK"
+    fi
 
     # Honor the `enabled` flag in meta.json (silently skip if false).
     local meta="$ROOT_DIR/frameworks/$fw/meta.json"
@@ -209,7 +214,7 @@ import json; print(str(json.load(open('$meta')).get('enabled', True)).lower())" 
     framework_build
 
     local need_pg=false
-    if framework_subscribes_to async-db; then need_pg=true; fi
+    if framework_subscribes_to async-db || framework_subscribes_to database-concurrency; then need_pg=true; fi
     if $need_pg; then postgres_start; fi
 
     local profiles_to_run

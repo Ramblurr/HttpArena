@@ -2,9 +2,9 @@
   (:require
    [clojure.data.json :as json]
    [clojure.test :as test :refer [are deftest is]]
-   [httparena.ring.core :as core])
-  (:import
-   [io.vertx.core AsyncResult]))
+   [hikari-cp.core :as hikari]
+   [httparena.ring.core :as core]
+   [next.jdbc :as jdbc]))
 
 (def dataset
   [{:id 1
@@ -44,52 +44,83 @@
 (deftest declared-routes-reject-unsupported-methods
   (are [request] (= 405 (:status (core/app request)))
     {:request-method :post :uri "/json/1" :params {}}
-    {:request-method :post :uri "/async-db" :params {}}
+    {:request-method :post :uri "/database-concurrency" :params {}}
     {:request-method :get :uri "/upload" :params {}}
     {:request-method :post :uri "/pipeline" :params {}}
     {:request-method :post :uri "/static/app.js" :params {}}))
 
-(deftest async-db-route-responds-with-empty-fallback
-  (with-redefs [core/init-async-db! (constantly nil)]
-    (let [response (promise)]
-      (core/app {:request-method :get
-                 :uri "/async-db"
-                 :params {}}
-                #(deliver response %)
-                #(deliver response %))
-      (is (= {:items [] :count 0}
-             (json/read-str (:body @response) :key-fn keyword))))))
+(deftest converts-postgres-uri-for-hikari
+  (is (= {:jdbc-url          "jdbc:postgresql://localhost:5432/benchmark?ApplicationName=proof"
+          :username          "bench name"
+          :password          "p:a@ss"
+          :maximum-pool-size 256}
+         (core/database-url->hikari-options
+          "postgres://bench%20name:p%3Aa%40ss@localhost:5432/benchmark?ApplicationName=proof"))))
 
-(deftest async-db-query-failures-use-empty-fallback
-  (let [completion (reify AsyncResult
-                     (succeeded [_] false)
-                     (failed [_] true)
-                     (result [_] nil)
-                     (cause [_] (Exception. "database unavailable")))
-        response (promise)]
-    (core/complete-async-db! completion
-                             #(deliver response %)
-                             #(deliver response %))
-    (is (= {:items [] :count 0}
-           (json/read-str (:body @response) :key-fn keyword)))))
+(deftest database-concurrency-falls-back-through-the-ring-handler
+  (with-redefs [core/datasource! (constantly nil)]
+    (is (= {:status  200
+            :headers {"Content-Type" "application/json"}
+            :body    {"items" [] "count" 0}}
+           (update (core/handler {:uri "/database-concurrency"
+                                  :request-method :get
+                                  :query-string "min=10&max=50&limit=50"})
+                   :body
+                   json/read-str)))))
 
-(deftest async-db-conversion-errors-use-raise
-  (let [exception (ex-info "conversion failed" {})
-        response (promise)]
-    (with-redefs [core/vertx-row->item (fn [_] (throw exception))]
-      (core/respond-with-db-rows! [::row]
-                                  #(deliver response %)
-                                  #(deliver response %)))
-    (is (identical? exception @response))))
+(deftest datasource-creation-retries-after-failure
+  (let [attempts (atom 0)
+        database ::database
+        original @core/datasource]
+    (try
+      (reset! core/datasource nil)
+      (with-redefs [core/database-url->hikari-options (constantly {})
+                    hikari/make-datasource (fn [_]
+                                             (if (= 1 (swap! attempts inc))
+                                               (throw (ex-info "unavailable" {}))
+                                               database))]
+        (is (= [nil database database]
+               [(core/datasource!)
+                (core/datasource!)
+                (core/datasource!)])))
+      (finally
+        (reset! core/datasource original)))))
 
-(deftest application-errors-use-raise
-  (let [exception (ex-info "unexpected" {})
-        response (promise)]
-    (with-redefs [core/static-response (fn [_] (throw exception))]
-      (core/app {:request-method :get :uri "/static/app.js"}
-                #(deliver response %)
-                #(deliver response %)))
-    (is (identical? exception @response))))
+(deftest database-query-failure-falls-back-through-the-ring-handler
+  (with-redefs [core/datasource! (constantly ::database)
+                jdbc/execute! (fn [& _]
+                                (throw (ex-info "query failed" {})))]
+    (is (= {"items" [] "count" 0}
+           (json/read-str (:body (core/handler {:uri "/database-concurrency"
+                                                :request-method :get
+                                                :query-string "min=10&max=50&limit=50"})))))))
+
+(deftest database-mapping-failure-falls-back-through-the-ring-handler
+  (with-redefs [core/datasource! (constantly ::database)
+                jdbc/execute! (constantly [{:id 1 :tags nil}])]
+    (is (= {"items" [] "count" 0}
+           (json/read-str (:body (core/handler {:uri "/database-concurrency"
+                                                :request-method :get
+                                                :query-string "min=10&max=50&limit=50"})))))))
+
+(deftest maps-database-rows-with-nested-rating
+  (is (= [{:id       1
+           :name     "widget"
+           :category "tools"
+           :price    10
+           :quantity 2
+           :active   true
+           :tags     ["sale"]
+           :rating   {:score 4 :count 9}}]
+         (core/rows->items [{:id           1
+                             :name         "widget"
+                             :category     "tools"
+                             :price        10
+                             :quantity     2
+                             :active       true
+                             :tags         "[\"sale\"]"
+                             :rating_score 4
+                             :rating_count 9}]))))
 
 (defn -main [& _args]
   (let [results (test/run-tests 'httparena.ring.core-test)]

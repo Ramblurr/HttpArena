@@ -2,7 +2,7 @@
   "display_name": "ring",
   "language": "Clojure",
   "type": "emerging",
-  "mode": "standard",
+  "mode": "tuned",
   "engine": "Jetty",
   "description": "Ring application using the official Ring Jetty adapter and standard Ring middleware.",
   "repo": "https://github.com/ring-clojure/ring",
@@ -16,6 +16,6 @@
     "json-comp",
     "upload",
     "static",
-    "async-db"
+    "database-concurrency"
   ]
 }

@@ -1,0 +1,20 @@
+{
+  "profile": "database-concurrency",
+  "io_model": "blocking-jdbc",
+  "route": {
+    "path": "/database-concurrency",
+    "defaults": {"min": 10, "max": 50, "limit": 50},
+    "limit": {"minimum": 1, "maximum": 50},
+    "fallback": {"status": 200, "body": {"items": [], "count": 0}}
+  },
+  "dependencies": {
+    "next.jdbc": "1.3.1118",
+    "org.postgresql/postgresql": "42.7.13",
+    "com.zaxxer/HikariCP": "4.1.0"
+  },
+  "pool": {
+    "maximum_pool_size": "DATABASE_MAX_CONN",
+    "request_closes_datasource": false,
+    "retry_after_failure": true
+  }
+}

@@ -51,6 +51,7 @@ Create a `meta.json` file in your framework directory:
 | `api-16` | HTTP/1.1 | `/baseline11`, `/json/{count}`, `/async-db` (16 CPU, 32 GB) |
 | `static` | HTTP/1.1 | `/static/*` (port 8080) |
 | `async-db` | HTTP/1.1 | `/async-db?min=X&max=Y&limit=N` (requires `DATABASE_URL`) |
+| `database-concurrency` | HTTP/1.1 | `/database-concurrency?min=X&max=Y&limit=N` (blocking JDBC on JDK 25 virtual threads; requires `DATABASE_URL`) |
 | `crud` | HTTP/1.1 | `/api/items`, `/api/items/{id}` (GET/POST/PUT; requires `DATABASE_URL`, optional `REDIS_URL`) |
 | `baseline-h2` | HTTP/2 | `/baseline2` (TLS, port 8443) |
 | `static-h2` | HTTP/2 | `/static/*` (TLS, port 8443) |

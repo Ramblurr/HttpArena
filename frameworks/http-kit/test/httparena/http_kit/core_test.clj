@@ -1,60 +1,76 @@
 (ns httparena.http-kit.core-test
   (:require
+   [clojure.data.json :as json]
    [clojure.test :refer [deftest is]]
    [httparena.http-kit.core :as core]
-   [org.httpkit.server :as http-kit])
-  (:import
-   [io.vertx.sqlclient Pool PreparedQuery]
-   [java.lang.reflect InvocationHandler Method Proxy]))
+   [next.jdbc :as jdbc]))
 
 (def empty-response
-  {:status 200
+  {:status  200
    :headers {"content-type" "application/json"}
-   :body "{\"items\":[],\"count\":0}"})
+   :body    "{\"items\":[],\"count\":0}"})
 
-(defn interface-proxy [^Class interface handler]
-  (Proxy/newProxyInstance
-   (.getClassLoader interface)
-   (into-array Class [interface])
-   (reify InvocationHandler
-     (invoke [_ proxy method args]
-       (handler proxy method args)))))
+(def sample-row
+  {:id           1
+   :name         "item"
+   :category     "cat"
+   :price        10
+   :quantity     2
+   :active       true
+   :tags         "[\"a\"]"
+   :rating_score 4
+   :rating_count 3})
 
-(defn request-responses [database]
-  (let [responses (atom [])]
-    (with-redefs [core/init-async-db! (fn [] database)
-                  http-kit/as-channel (fn [_ options]
-                                        ((:on-open options) ::channel))
-                  http-kit/send! (fn [_ response]
-                                   (swap! responses conj response))]
-      (core/async-db-response {:params {}}))
-    @responses))
+(defn response-body [request]
+  (json/read-str (:body (core/database-concurrency-response request)) :key-fn keyword))
 
-(deftest prepared-query-failure-falls-back-and-retries
-  (let [attempts (atom 0)
-        database (interface-proxy
-                  Pool
-                  (fn [_ ^Method method _]
-                    (when (= "preparedQuery" (.getName method))
-                      (swap! attempts inc)
-                      (throw (ex-info "preparedQuery failed" {})))))
-        responses [(request-responses database)
-                   (request-responses database)]]
-    (is (= {:attempts 2
-            :responses [[empty-response] [empty-response]]}
-           {:attempts @attempts
-            :responses responses}))))
+(deftest converts-postgres-uri-for-hikari
+  (with-redefs [core/database-max-conn (constantly 256)]
+    (is (= {:jdbc-url          "jdbc:postgresql://localhost:5432/benchmark?ApplicationName=proof"
+            :username          "bench name"
+            :password          "p:a@ss"
+            :maximum-pool-size 256}
+           (core/database-url->hikari-options
+            "postgres://bench%20name:p%3Aa%40ss@localhost:5432/benchmark?ApplicationName=proof")))))
 
-(deftest execute-dispatch-failure-falls-back
-  (let [query (interface-proxy
-               PreparedQuery
-               (fn [_ ^Method method _]
-                 (when (= "execute" (.getName method))
-                   (throw (ex-info "execute failed" {})))))
-        database (interface-proxy
-                  Pool
-                  (fn [_ ^Method method _]
-                    (when (= "preparedQuery" (.getName method))
-                      query)))]
-    (is (= [empty-response]
-           (request-responses database)))))
+(deftest builds-database-concurrency-statements
+  (is (= [[core/database-concurrency-query 10 50 50]
+          [core/database-concurrency-query 10 50 50]
+          [core/database-concurrency-query 10 50 1]
+          [core/database-concurrency-query 10 50 50]]
+         [(core/database-concurrency-statement {})
+          (core/database-concurrency-statement {"min" "invalid"
+                                                "max" "invalid"
+                                                "limit" "invalid"})
+          (core/database-concurrency-statement {"limit" "0"})
+          (core/database-concurrency-statement {"limit" "51"})])))
+
+(deftest maps-jdbc-rows-into-the-shared-response-shape
+  (with-redefs [core/init-database-concurrency! (constantly ::datasource)
+                jdbc/execute! (fn [_ _ _] [sample-row])]
+    (is (= {:items [{:id       1
+                     :name     "item"
+                     :category "cat"
+                     :price    10
+                     :quantity 2
+                     :active   true
+                     :tags     ["a"]
+                     :rating   {:score 4 :count 3}}]
+            :count 1}
+           (response-body {:params {}})))))
+
+(deftest returns-the-canonical-empty-response-for-jdbc-failure
+  (with-redefs [core/init-database-concurrency! (constantly ::datasource)
+                jdbc/execute! (fn [& _]
+                                (throw (ex-info "query failed" {})))]
+    (is (= {:items [] :count 0}
+           (response-body {:params {}})))))
+
+(deftest exposes-database-concurrency-in-place-of-async-db
+  (with-redefs [core/init-database-concurrency! (constantly nil)]
+    (is (= {:database-concurrency empty-response
+            :async-db              {:status 404
+                                    :headers {"content-type" "text/plain"}
+                                    :body "not found"}}
+           {:database-concurrency (core/app {:uri "/database-concurrency"})
+            :async-db              (core/app {:uri "/async-db"})}))))

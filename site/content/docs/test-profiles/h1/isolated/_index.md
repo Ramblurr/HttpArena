@@ -15,6 +15,7 @@ Single-endpoint benchmarks that measure framework performance on one task at a t
   {{< card link="json-tls" title="JSON over TLS" subtitle="Same JSON workload transported over HTTP/1.1 + TLS on port 8081 - measures the cost of encryption on top of serialization." icon="lock-closed" >}}
   {{< card link="upload" title="Upload" subtitle="Rotates 500 KB, 2 MB, 10 MB, and 20 MB binary payloads; the server returns each exact byte count." icon="cloud-upload" >}}
   {{< card link="async-database" title="Async Database (Postgres)" subtitle="Async Postgres range query over 100K rows, connection pooling, and JSON serialization. Framework-only benchmark." icon="database" >}}
+  {{< card link="database-concurrency" title="Database Concurrency (JDBC virtual threads)" subtitle="Blocking JDBC range query on JDK 25 virtual threads with one HikariCP datasource. Separate from Async Database." icon="database" >}}
   {{< card link="static" title="Static Files" subtitle="Serves 20 static files - CSS, JS, HTML, fonts, images - over HTTP/1.1." icon="photograph" >}}
   {{< card link="pipelined" title="Pipelined (16x)" subtitle="16 requests sent back-to-back per connection, testing raw I/O and pipeline batching." icon="fast-forward" >}}
   {{< card link="crud" title="CRUD (REST API)" subtitle="Realistic REST API with paginated list, cached reads, create, and update against Postgres." icon="database" >}}

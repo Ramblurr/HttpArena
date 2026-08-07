@@ -105,6 +105,7 @@ echo "[info] Subscribed tests: $TESTS"
 # silently loses that coverage in every benchmark run. Sourced rather than
 # re-listed so PROFILES stays the single source of truth.
 source "$SCRIPT_DIR/lib/profiles.sh"
+source "$SCRIPT_DIR/lib/database-concurrency.sh"
 UNKNOWN_TESTS=()
 for t in $TESTS; do
     [ -n "${PROFILES[$t]+x}" ] || UNKNOWN_TESTS+=("$t")
@@ -122,6 +123,10 @@ has_test() {
     # positives. Bash pattern match on the space-padded string is exact.
     [[ " $TESTS " == *" $1 "* ]]
 }
+
+if has_test "database-concurrency"; then
+    validate_database_concurrency_contract "$ROOT_DIR" "$FRAMEWORK"
+fi
 
 # Build — skip standalone build if framework only subscribes to compose profiles
 # (gateway-64, gateway-h3, production-stack) and has no isolated tests.
@@ -146,7 +151,7 @@ fi
 HARD_NOFILE=$(ulimit -Hn 2>/dev/null || echo 1048576)
 # Docker --ulimit nofile rejects "unlimited"; fall back to a large numeric cap
 [[ "$HARD_NOFILE" =~ ^[0-9]+$ ]] || HARD_NOFILE=1048576
-if has_test "async-db" || has_test "crud" || has_test "api-4" || has_test "api-16" || has_test "gateway-64" || has_test "gateway-h3" || has_test "production-stack" || has_test "fortunes"; then
+if has_test "async-db" || has_test "database-concurrency" || has_test "crud" || has_test "api-4" || has_test "api-16" || has_test "gateway-64" || has_test "gateway-h3" || has_test "production-stack" || has_test "fortunes"; then
     docker_args=(-d --name "$CONTAINER_NAME" --network host --security-opt seccomp=unconfined
         --ulimit memlock=-1:-1 --ulimit nofile="$HARD_NOFILE:$HARD_NOFILE")
 else
@@ -194,8 +199,8 @@ fi
 # transitively (e.g. an engine built on io_uring under another name). This
 # mirrors benchmark.sh, which always runs framework containers unconfined.
 
-# Start Postgres sidecar if async-db is needed
-if has_test "async-db" || has_test "crud" || has_test "api-4" || has_test "api-16" || has_test "gateway-64" || has_test "gateway-h3" || has_test "production-stack" || has_test "fortunes"; then
+# Start the Postgres sidecar for database profiles.
+if has_test "async-db" || has_test "database-concurrency" || has_test "crud" || has_test "api-4" || has_test "api-16" || has_test "gateway-64" || has_test "gateway-h3" || has_test "production-stack" || has_test "fortunes"; then
     echo "[postgres] Starting Postgres sidecar for validation..."
     docker rm -f "$PG_CONTAINER" 2>/dev/null || true
     docker run -d --name "$PG_CONTAINER" --network host \
@@ -1174,6 +1179,56 @@ print(f'{count} {has_rating} {has_tags} {has_active_bool}')
         PASS=$((PASS + 1))
     else
         fail_with_link "[GET /async-db empty range]: expected count=0, got $pgdb_empty" "$ASYNCDB_DOCS"
+    fi
+fi
+
+# ───── Database Concurrency (GET /database-concurrency) ─────
+
+if has_test "database-concurrency"; then
+    DATABASE_CONCURRENCY_DOCS="$DOCS_BASE/h1/isolated/database-concurrency/validation"
+    echo "[test] database-concurrency endpoint"
+    database_concurrency_fail=false
+    db_params=("min=5&max=80&limit=7" "min=20&max=150&limit=18" "min=100&max=400&limit=33" "min=10&max=50&limit=50")
+    for dbp in "${db_params[@]}"; do
+        dblimit=$(echo "$dbp" | grep -oP 'limit=\K[0-9]+')
+        response=$(curl -s --max-time 30 "http://localhost:$PORT/database-concurrency?$dbp" || true)
+        pgdb_result=$(echo "$response" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+count = d.get('count', 0)
+items = d.get('items', [])
+has_rating = all('rating' in item and 'score' in item['rating'] for item in items) if items else False
+has_tags = all(isinstance(item.get('tags'), list) for item in items) if items else False
+has_active_bool = all(isinstance(item.get('active'), bool) for item in items) if items else False
+print(f'{count} {has_rating} {has_tags} {has_active_bool}')
+" 2>/dev/null || echo "0 False False False")
+        pgdb_count=$(echo "$pgdb_result" | cut -d' ' -f1)
+        pgdb_rating=$(echo "$pgdb_result" | cut -d' ' -f2)
+        pgdb_tags=$(echo "$pgdb_result" | cut -d' ' -f3)
+        pgdb_active=$(echo "$pgdb_result" | cut -d' ' -f4)
+
+        if [ "$pgdb_count" = "$dblimit" ] && [ "$pgdb_rating" = "True" ] && [ "$pgdb_tags" = "True" ] && [ "$pgdb_active" = "True" ]; then
+            :
+        else
+            fail_with_link "[GET /database-concurrency?limit=$dblimit]: count=$pgdb_count, rating=$pgdb_rating, tags=$pgdb_tags, active=$pgdb_active" "$DATABASE_CONCURRENCY_DOCS"
+            database_concurrency_fail=true
+        fi
+    done
+    if [ "$database_concurrency_fail" = "false" ]; then
+        echo "  PASS [GET /database-concurrency?limit=N] (4 limits verified, correct structure)"
+        PASS=$((PASS + 1))
+    fi
+
+    check_header "GET /database-concurrency Content-Type" "Content-Type" "application/json" "$DATABASE_CONCURRENCY_DOCS" \
+        "http://localhost:$PORT/database-concurrency?min=10&max=50&limit=50"
+
+    response_empty=$(curl -s --max-time 30 "http://localhost:$PORT/database-concurrency?min=9999&max=9999&limit=50" || true)
+    pgdb_empty=$(echo "$response_empty" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count','-1'))" 2>/dev/null || echo "-1")
+    if [ "$pgdb_empty" = "0" ]; then
+        echo "  PASS [GET /database-concurrency empty range] (count=0)"
+        PASS=$((PASS + 1))
+    else
+        fail_with_link "[GET /database-concurrency empty range]: expected count=0, got $pgdb_empty" "$DATABASE_CONCURRENCY_DOCS"
     fi
 fi
 
